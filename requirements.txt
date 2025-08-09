@@ -1,0 +1,17 @@
+# RL_AIHandkerchief 项目依赖
+
+## Python 依赖 (requirements.txt 格式)
+
+# ROS 2 构建必需依赖
+catkin_pkg==1.0.0
+empy==3.3.4
+lark==1.2.2
+
+# 可选的额外依赖
+setuptools>=40.0.0
+wheel
+
+# Isaac Lab 相关（已在 conda 环境中）
+# isaacsim-ros1==4.5.0.0
+# isaacsim-ros2==4.5.0.0
+# colcon-ros==0.5.0
