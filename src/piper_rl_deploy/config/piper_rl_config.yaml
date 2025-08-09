@@ -1,0 +1,49 @@
+# Piper RL 部署配置文件
+
+piper_rl_controller:
+  ros__parameters:
+    # 控制频率设置
+    control_frequency: 200.0      # 控制循环频率 (Hz)
+    inference_frequency: 50.0     # 模型推理频率 (Hz)
+
+        # 模型配置
+    model_path: "/home/gift/RL_AIHandkerchief/src/piper_rl_deploy/models/piper_policy.pt"               # 模型文件路径 (请设置为您的.pt或.onnx文件路径)
+    model_type: "pytorch"        # 模型类型: "pytorch" 或 "onnx"
+    use_history: false           # 关闭历史，因为训练代码没有使用历史
+    obs_dim: 12                  # 观测维度: 6(动作) + 3(手帕位置) + 3(手帕角速度)
+    action_dim: 6                # 动作维度: 6个关节
+    history_length: 1            # 不使用历史
+
+    # 关节配置 - 匹配训练代码中的joint1-joint6
+    joint_names: 
+      - "joint_1"
+      - "joint_2" 
+      - "joint_3"
+      - "joint_4"
+      - "joint_5"
+      - "joint_6"
+
+    # PD控制器增益 - 根据训练代码中的配置调整
+    default_kp: [80.0, 80.0, 80.0, 80.0, 80.0, 80.0]
+    default_kd: [4.0, 4.0, 4.0, 4.0, 4.0, 4.0]
+
+    # 动作缩放和偏移 - 训练代码中通过关节限制处理，这里设为默认值
+    action_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    joint_pos_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # 安全限制
+    max_joint_velocity: 10.0     # 最大关节速度 (rad/s)
+    max_joint_effort: 100.0      # 最大关节力矩 (Nm)
+    position_limits:             # 关节位置限制 (rad) - 6个关节
+      min: [-3.14, -1.57, -3.14, -1.57, -3.14, -1.57]
+      max: [3.14, 1.57, 3.14, 1.57, 3.14, 1.57]
+
+    # 观测配置
+    observation:
+      normalize: true            # 是否归一化观测
+      clip_range: 10.0          # 观测裁剪范围
+
+    # 命令配置  
+    command:
+      max_linear_vel: 1.0       # 最大线速度 (m/s)
+      max_angular_vel: 1.0      # 最大角速度 (rad/s)
