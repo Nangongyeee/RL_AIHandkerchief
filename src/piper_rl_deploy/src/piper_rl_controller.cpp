@@ -1,6 +1,9 @@
 #include "piper_rl_deploy/piper_rl_controller.hpp"
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <cmath>
+
+#define M_PI 3.14159265358979323846
 
 namespace piper_rl_deploy {
 
@@ -8,7 +11,6 @@ PiperRLController::PiperRLController(const std::string& node_name)
     : Node(node_name)
     , obs_history_(50)  // 默认保存50个历史观测
     , action_history_(10)  // 默认保存10个历史动作
-    , cmd_vel_received_(false)
     , model_ready_(false)
     , robot_ready_(false)
     , emergency_stop_(false)
@@ -20,22 +22,13 @@ PiperRLController::PiperRLController(const std::string& node_name)
     initializeModel();
     
     // 初始化ROS接口
-    cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-        "/cmd_vel", 10, 
-        std::bind(&PiperRLController::cmdVelCallback, this, std::placeholders::_1)
-    );
-    
     joint_state_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
-        "/joint_states", 10,
+        "/joint_states_single", 10,
         std::bind(&PiperRLController::jointStateCallback, this, std::placeholders::_1)
     );
     
-    imu_sub_ = this->create_subscription<sensor_msgs::msg::Imu>(
-        "/imu", 10,
-        std::bind(&PiperRLController::imuCallback, this, std::placeholders::_1)
-    );
-    
-    joint_cmd_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_command", 10);
+    // 发布关节控制命令到piper节点期望的话题
+    joint_cmd_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     action_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/rl_actions", 10);
     status_pub_ = this->create_publisher<std_msgs::msg::String>("/piper_status", 10);
     
@@ -56,6 +49,27 @@ PiperRLController::PiperRLController(const std::string& node_name)
     RCLCPP_INFO(this->get_logger(), "Piper RL Controller initialized");
 }
 
+PiperRLController::~PiperRLController() {
+    // 优雅关闭
+    emergency_stop_ = true;
+    
+    // 停止定时器
+    if (control_timer_) {
+        control_timer_->cancel();
+    }
+    if (inference_timer_) {
+        inference_timer_->cancel();
+    }
+    
+    // 发布零位置命令
+    if (joint_cmd_pub_ && robot_ready_) {
+        std::vector<float> zero_actions(action_dim_, 0.0);
+        publishJointCommands(zero_actions);
+    }
+    
+    RCLCPP_INFO(this->get_logger(), "Piper RL Controller shutting down");
+}
+
 void PiperRLController::loadParameters() {
     // 声明参数
     this->declare_parameter("control_frequency", 200.0);
@@ -63,7 +77,7 @@ void PiperRLController::loadParameters() {
     this->declare_parameter("model_path", "");
     this->declare_parameter("model_type", "pytorch");
     this->declare_parameter("use_history", false);    // 训练代码没有使用历史
-    this->declare_parameter("obs_dim", 12);           // 6(动作) + 3(手帕位置) + 3(手帕角速度) 
+    this->declare_parameter("obs_dim", 12);           // 6(关节角度) + 3(手绢位置) + 3(手绢速度) 
     this->declare_parameter("action_dim", 6);         // 6个关节
     this->declare_parameter("history_length", 1);     // 不使用历史
     
@@ -86,8 +100,8 @@ void PiperRLController::loadParameters() {
         RCLCPP_ERROR(this->get_logger(), "Unknown model type: %s", model_type_str.c_str());
     }
     
-    // 关节配置参数 - 匹配训练代码
-    this->declare_parameter("joint_names", std::vector<std::string>{"joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"});
+    // 关节配置参数 - 匹配piper节点
+    this->declare_parameter("joint_names", std::vector<std::string>{"joint1", "joint2", "joint3", "joint4", "joint5", "joint6"});
     this->declare_parameter("default_kp", std::vector<double>{80.0, 80.0, 80.0, 80.0, 80.0, 80.0});
     this->declare_parameter("default_kd", std::vector<double>{4.0, 4.0, 4.0, 4.0, 4.0, 4.0});
     this->declare_parameter("action_scale", std::vector<double>{1.0, 1.0, 1.0, 1.0, 1.0, 1.0});
@@ -109,6 +123,9 @@ void PiperRLController::initializeModel() {
         return;
     }
     
+    RCLCPP_INFO(this->get_logger(), "Loading model from path: %s", model_path_.c_str());
+    RCLCPP_INFO(this->get_logger(), "Expected input dim: %zu, output dim: %zu", obs_dim_, action_dim_);
+    
     model_loader_ = std::make_unique<ModelLoader>(model_path_, model_type_);
     
     if (model_loader_->loadModel()) {
@@ -116,6 +133,8 @@ void PiperRLController::initializeModel() {
         model_loader_->setOutputDim(action_dim_);
         model_ready_ = true;
         RCLCPP_INFO(this->get_logger(), "Model loaded successfully from: %s", model_path_.c_str());
+        RCLCPP_INFO(this->get_logger(), "Model ready for inference with input_dim=%zu, output_dim=%zu", 
+                    obs_dim_, action_dim_);
     } else {
         RCLCPP_ERROR(this->get_logger(), "Failed to load model from: %s", model_path_.c_str());
         model_ready_ = false;
@@ -127,12 +146,6 @@ void PiperRLController::initializeRobot() {
     current_obs_.joint_positions.resize(joint_names_.size(), 0.0);
     current_obs_.joint_velocities.resize(joint_names_.size(), 0.0);
     current_obs_.joint_efforts.resize(joint_names_.size(), 0.0);
-    current_obs_.imu_orientation.resize(4, 0.0);
-    current_obs_.imu_angular_velocity.resize(3, 0.0);
-    current_obs_.imu_linear_acceleration.resize(3, 0.0);
-    current_obs_.base_lin_vel.resize(3, 0.0);
-    current_obs_.base_ang_vel.resize(3, 0.0);
-    current_obs_.commands.resize(3, 0.0);
     current_obs_.actions_history.resize(action_dim_, 0.0);
     
     // 初始化控制指令
@@ -150,16 +163,6 @@ void PiperRLController::initializeRobot() {
     
     robot_ready_ = true;
     RCLCPP_INFO(this->get_logger(), "Robot initialized with %zu joints", joint_names_.size());
-}
-
-void PiperRLController::cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
-    cmd_vel_ = *msg;
-    cmd_vel_received_ = true;
-    
-    // 更新命令到观测中
-    current_obs_.commands[0] = static_cast<float>(cmd_vel_.linear.x);
-    current_obs_.commands[1] = static_cast<float>(cmd_vel_.linear.y);
-    current_obs_.commands[2] = static_cast<float>(cmd_vel_.angular.z);
 }
 
 void PiperRLController::jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -182,22 +185,6 @@ void PiperRLController::jointStateCallback(const sensor_msgs::msg::JointState::S
     }
 }
 
-void PiperRLController::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-    // 更新IMU数据
-    current_obs_.imu_orientation[0] = static_cast<float>(msg->orientation.w);
-    current_obs_.imu_orientation[1] = static_cast<float>(msg->orientation.x);
-    current_obs_.imu_orientation[2] = static_cast<float>(msg->orientation.y);
-    current_obs_.imu_orientation[3] = static_cast<float>(msg->orientation.z);
-    
-    current_obs_.imu_angular_velocity[0] = static_cast<float>(msg->angular_velocity.x);
-    current_obs_.imu_angular_velocity[1] = static_cast<float>(msg->angular_velocity.y);
-    current_obs_.imu_angular_velocity[2] = static_cast<float>(msg->angular_velocity.z);
-    
-    current_obs_.imu_linear_acceleration[0] = static_cast<float>(msg->linear_acceleration.x);
-    current_obs_.imu_linear_acceleration[1] = static_cast<float>(msg->linear_acceleration.y);
-    current_obs_.imu_linear_acceleration[2] = static_cast<float>(msg->linear_acceleration.z);
-}
-
 void PiperRLController::controlLoop() {
     if (!robot_ready_ || emergency_stop_) {
         return;
@@ -209,11 +196,22 @@ void PiperRLController::controlLoop() {
 
 void PiperRLController::inferenceLoop() {
     if (!model_ready_ || !robot_ready_ || emergency_stop_) {
+        if (!model_ready_) {
+            RCLCPP_DEBUG(this->get_logger(), "Model not ready for inference");
+        }
+        if (!robot_ready_) {
+            RCLCPP_DEBUG(this->get_logger(), "Robot not ready for inference");
+        }
         return;
     }
     
     // 计算观测
     std::vector<float> observation = computeObservation();
+    
+    RCLCPP_INFO(this->get_logger(), "Computing observation, size: %zu", observation.size());
+    RCLCPP_INFO(this->get_logger(), "Joint positions: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]", 
+                observation[0], observation[1], observation[2], 
+                observation[3], observation[4], observation[5]);
     
     // 如果使用历史，添加到历史缓存
     if (use_history_) {
@@ -233,16 +231,27 @@ void PiperRLController::inferenceLoop() {
         observation = full_obs;
     }
     
+    RCLCPP_INFO(this->get_logger(), "Starting model inference with observation size: %zu", observation.size());
+    
     // 模型推理
     std::vector<float> raw_actions = model_loader_->inference(observation);
     
     if (raw_actions.empty()) {
-        RCLCPP_WARN(this->get_logger(), "Model inference failed");
+        RCLCPP_WARN(this->get_logger(), "Model inference failed - empty output");
         return;
     }
     
+    RCLCPP_INFO(this->get_logger(), "Model inference successful, output size: %zu", raw_actions.size());
+    RCLCPP_INFO(this->get_logger(), "Raw actions: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]", 
+                raw_actions[0], raw_actions[1], raw_actions[2], 
+                raw_actions[3], raw_actions[4], raw_actions[5]);
+    
     // 处理动作
     std::vector<float> processed_actions = processActions(raw_actions);
+    
+    RCLCPP_INFO(this->get_logger(), "Processed actions: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]", 
+                processed_actions[0], processed_actions[1], processed_actions[2], 
+                processed_actions[3], processed_actions[4], processed_actions[5]);
     
     // 安全检查
     if (!safetyCheck(processed_actions)) {
@@ -257,26 +266,55 @@ void PiperRLController::inferenceLoop() {
     // 更新动作历史
     action_history_.push(processed_actions);
     current_obs_.actions_history = processed_actions;
+    
+    RCLCPP_INFO(this->get_logger(), "Inference loop completed successfully");
 }
 
 std::vector<float> PiperRLController::computeObservation() {
     std::vector<float> obs;
     
-    // 根据训练代码，观测包括：
-    // 1. 当前动作 (6维)
-    // 2. 手帕质心位置 (3维) 
-    // 3. 手帕角速度 (3维)
+    // 根据您的描述，观测包括：
+    // 1. 机械臂的6轴角度 (6维)
+    // 2. 手绢的位置 (3维) - 使用正弦波动
+    // 3. 手绢的速度 (3维) - 对应的速度波动
     // 总共12维观测
     
-    // 1. 当前动作 (6维) - 使用上一次的动作作为当前观测
-    obs.insert(obs.end(), current_obs_.actions_history.begin(), current_obs_.actions_history.end());
+    // 1. 机械臂6轴角度
+    obs.insert(obs.end(), current_obs_.joint_positions.begin(), current_obs_.joint_positions.end());
     
-    // 2. 手帕质心位置 (3维) - 这里用IMU位置作为手帕位置的近似
-    // 在实际部署中，您可能需要通过视觉系统或其他传感器获取手帕位置
-    obs.insert(obs.end(), current_obs_.imu_linear_acceleration.begin(), current_obs_.imu_linear_acceleration.end());
+    // 获取当前时间用于正弦波动
+    double current_time = this->now().seconds();
     
-    // 3. 手帕角速度 (3维) - 使用IMU角速度作为手帕角速度的近似
-    obs.insert(obs.end(), current_obs_.imu_angular_velocity.begin(), current_obs_.imu_angular_velocity.end());
+    // 2. 手绢位置 (3维) - 使用正弦函数产生波动，范围在0.1米内
+    float base_x = 0.016f;
+    float base_y = -0.34f;
+    float base_z = 0.57f;
+    
+    // 使用不同频率的正弦波来模拟手绢的自然摆动
+    float x_amplitude = 0.05f;  // 0.1米范围内，所以振幅是0.05米
+    float y_amplitude = 0.05f;
+    float z_amplitude = 0.05f;
+    
+    float x_freq = 0.5f;  // 频率 (Hz)
+    float y_freq = 0.7f;  // 不同频率避免同步
+    float z_freq = 0.3f;
+    
+    float handkerchief_x = base_x + x_amplitude * std::sin(2.0f * M_PI * x_freq * current_time);
+    float handkerchief_y = base_y + y_amplitude * std::sin(2.0f * M_PI * y_freq * current_time);
+    float handkerchief_z = base_z + z_amplitude * std::sin(2.0f * M_PI * z_freq * current_time);
+    
+    obs.push_back(handkerchief_x);  // x位置
+    obs.push_back(handkerchief_y);  // y位置
+    obs.push_back(handkerchief_z);  // z位置
+    
+    // 3. 手绢速度 (3维) - 对应位置的导数（速度）
+    float handkerchief_vx = x_amplitude * 2.0f * M_PI * x_freq * std::cos(2.0f * M_PI * x_freq * current_time);
+    float handkerchief_vy = y_amplitude * 2.0f * M_PI * y_freq * std::cos(2.0f * M_PI * y_freq * current_time);
+    float handkerchief_vz = z_amplitude * 2.0f * M_PI * z_freq * std::cos(2.0f * M_PI * z_freq * current_time);
+    
+    obs.push_back(handkerchief_vx);  // x速度
+    obs.push_back(handkerchief_vy);  // y速度
+    obs.push_back(handkerchief_vz);  // z速度
     
     return obs;
 }

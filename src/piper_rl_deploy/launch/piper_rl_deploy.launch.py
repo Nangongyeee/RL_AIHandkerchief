@@ -60,10 +60,8 @@ def generate_launch_description():
             }
         ],
         remappings=[
-            ('/cmd_vel', '/piper/cmd_vel'),
-            ('/joint_states', '/piper/joint_states'),
-            ('/joint_command', '/piper/joint_command'),
-            ('/imu', '/piper/imu'),
+            # 根据实际piper节点的话题名称进行映射
+            # 注意：这些映射可能需要根据实际机器人系统调整
         ]
     )
     

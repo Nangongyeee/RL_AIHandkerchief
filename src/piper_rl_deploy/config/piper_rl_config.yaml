@@ -4,24 +4,24 @@ piper_rl_controller:
   ros__parameters:
     # 控制频率设置
     control_frequency: 200.0      # 控制循环频率 (Hz)
-    inference_frequency: 50.0     # 模型推理频率 (Hz)
+    inference_frequency: 50.0   # 模型推理频率 (Hz)
 
         # 模型配置
-    model_path: "/home/gift/RL_AIHandkerchief/src/piper_rl_deploy/models/piper_policy.pt"               # 模型文件路径 (请设置为您的.pt或.onnx文件路径)
+    model_path: "/home/gift/RL_AIHandkerchief/src/piper_rl_deploy/models/model.pt"               # 模型文件路径 (请设置为您的.pt或.onnx文件路径)
     model_type: "pytorch"        # 模型类型: "pytorch" 或 "onnx"
     use_history: false           # 关闭历史，因为训练代码没有使用历史
     obs_dim: 12                  # 观测维度: 6(动作) + 3(手帕位置) + 3(手帕角速度)
     action_dim: 6                # 动作维度: 6个关节
     history_length: 1            # 不使用历史
 
-    # 关节配置 - 匹配训练代码中的joint1-joint6
+    # 关节配置 - 匹配实际piper机器人的关节名称
     joint_names: 
-      - "joint_1"
-      - "joint_2" 
-      - "joint_3"
-      - "joint_4"
-      - "joint_5"
-      - "joint_6"
+      - "joint1"
+      - "joint2" 
+      - "joint3"
+      - "joint4"
+      - "joint5"
+      - "joint6"
 
     # PD控制器增益 - 根据训练代码中的配置调整
     default_kp: [80.0, 80.0, 80.0, 80.0, 80.0, 80.0]

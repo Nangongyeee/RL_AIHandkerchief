@@ -22,12 +22,6 @@ struct RobotObservation {
     std::vector<float> joint_positions;
     std::vector<float> joint_velocities;
     std::vector<float> joint_efforts;
-    std::vector<float> imu_orientation;  // quaternion [w, x, y, z]
-    std::vector<float> imu_angular_velocity;
-    std::vector<float> imu_linear_acceleration;
-    std::vector<float> base_lin_vel;
-    std::vector<float> base_ang_vel;
-    std::vector<float> commands;  // [vx, vy, vyaw]
     std::vector<float> actions_history;
 };
 
@@ -42,13 +36,11 @@ struct RobotCommand {
 class PiperRLController : public rclcpp::Node {
 public:
     explicit PiperRLController(const std::string& node_name = "piper_rl_controller");
-    ~PiperRLController() = default;
+    ~PiperRLController();
 
 private:
     // ROS 订阅和发布
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
-    rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr action_pub_;
@@ -88,19 +80,13 @@ private:
     std::vector<double> action_scale_;
     std::vector<double> joint_pos_offset_;
     
-    // 命令缓存
-    geometry_msgs::msg::Twist cmd_vel_;
-    bool cmd_vel_received_;
-    
     // 状态标志
     bool model_ready_;
     bool robot_ready_;
     bool emergency_stop_;
     
     // 回调函数
-    void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
     void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
-    void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
     
     // 控制循环
     void controlLoop();

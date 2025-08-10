@@ -46,7 +46,7 @@ def generate_launch_description():
 
     gripper_exist_arg = DeclareLaunchArgument(
         'gripper_exist',
-        default_value='true',
+        default_value='false',
         description='Gripper existence flag'
     )
     
