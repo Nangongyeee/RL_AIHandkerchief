@@ -25,8 +25,8 @@ sudo make install
 
 2. **安装 CycloneDDS-CXX**:
 ```bash
-git clone https://github.com/eclipse-cyclonedx/cyclonedx-cxx.git
-cd cyclonedx-cxx
+git clone https://github.com/eclipse-cyclonedds/cyclonedds-cxx.git
+cd cyclonedds-cxx
 mkdir build && cd build
 cmake ..
 make -j
