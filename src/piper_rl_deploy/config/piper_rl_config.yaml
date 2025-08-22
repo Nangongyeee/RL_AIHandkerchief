@@ -4,7 +4,7 @@ piper_rl_controller:
   ros__parameters:
     # 控制频率设置
     control_frequency: 200.0      # 控制循环频率 (Hz)
-    inference_frequency: 50.0   # 模型推理频率 (Hz)
+    inference_frequency: 10.0   # 模型推理频率 (Hz)
 
         # 模型配置
     model_path: "/home/gift/RL_AIHandkerchief/src/piper_rl_deploy/models/model.pt"               # 模型文件路径 (请设置为您的.pt或.onnx文件路径)
@@ -13,6 +13,17 @@ piper_rl_controller:
     obs_dim: 12                  # 观测维度: 6(动作) + 3(手帕位置) + 3(手帕角速度)
     action_dim: 6                # 动作维度: 6个关节
     history_length: 1            # 不使用历史
+
+    # 话题名称配置
+    robot_base_pose_topic: "/vicon/root0822/root0822"      # 机械臂底座位置话题 (geometry_msgs/PoseStamped)
+    handkerchief_pose_topic: "/vicon/cloth082201/cloth082201"  # 手绢位置话题 (geometry_msgs/PoseStamped)
+    
+    # 机械偏置配置
+    handkerchief_z_offset: 0.0  # 手绢z轴机械偏置 (米)
+    
+    # 示例：如果使用Vicon系统，可以设置为实际话题名：
+    # robot_base_pose_topic: "/vicon/robot_base/robot_base"
+    # handkerchief_pose_topic: "/vicon/basketball0817/basketball0817"
 
     # 关节配置 - 匹配实际piper机器人的关节名称
     joint_names: 

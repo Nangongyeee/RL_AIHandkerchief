@@ -17,6 +17,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
+        (os.path.join('share', package_name, 'scripts'), glob('scripts/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -30,6 +31,10 @@ setup(
             'piper_single_ctrl = piper.piper_ctrl_single_node:main',
             'piper_ms_ctrl = piper.piper_start_ms_node:main',
             'piper_read_master = piper.piper_read_master_node:main',
+            'piper_ctrl_single_node = piper.piper_ctrl_single_node:main',
+            'test_mit_control = scripts.test_mit_control:main',
+            'simple_mit_thrower = scripts.simple_mit_thrower:main',
+            'mit_validator = scripts.mit_validator:main',
         ],
     },
 )

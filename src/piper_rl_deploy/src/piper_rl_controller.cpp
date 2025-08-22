@@ -1,6 +1,7 @@
 #include "piper_rl_deploy/piper_rl_controller.hpp"
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <cmath>
 
 #define M_PI 3.14159265358979323846
@@ -27,6 +28,18 @@ PiperRLController::PiperRLController(const std::string& node_name)
         std::bind(&PiperRLController::jointStateCallback, this, std::placeholders::_1)
     );
     
+    // 订阅机械臂底座位置（使用参数化话题名）
+    robot_base_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+        robot_base_pose_topic_, 10,
+        std::bind(&PiperRLController::robotBasePoseCallback, this, std::placeholders::_1)
+    );
+    
+    // 订阅手绢位置（使用参数化话题名）
+    handkerchief_pose_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+        handkerchief_pose_topic_, 10,
+        std::bind(&PiperRLController::handkerchiefPoseCallback, this, std::placeholders::_1)
+    );
+
     // 发布关节控制命令到piper节点期望的话题
     joint_cmd_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     action_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/rl_actions", 10);
@@ -81,6 +94,11 @@ void PiperRLController::loadParameters() {
     this->declare_parameter("action_dim", 6);         // 6个关节
     this->declare_parameter("history_length", 1);     // 不使用历史
     
+    // 话题名称参数
+    this->declare_parameter("robot_base_pose_topic", "/robot_base_pose");
+    this->declare_parameter("handkerchief_pose_topic", "/handkerchief_pose");
+    this->declare_parameter("handkerchief_z_offset", 0.09);
+    
     // 获取参数
     control_frequency_ = this->get_parameter("control_frequency").as_double();
     inference_frequency_ = this->get_parameter("inference_frequency").as_double();
@@ -89,6 +107,11 @@ void PiperRLController::loadParameters() {
     obs_dim_ = this->get_parameter("obs_dim").as_int();
     action_dim_ = this->get_parameter("action_dim").as_int();
     history_length_ = this->get_parameter("history_length").as_int();
+    
+    // 话题名称
+    robot_base_pose_topic_ = this->get_parameter("robot_base_pose_topic").as_string();
+    handkerchief_pose_topic_ = this->get_parameter("handkerchief_pose_topic").as_string();
+    handkerchief_z_offset_ = static_cast<float>(this->get_parameter("handkerchief_z_offset").as_double());
     
     std::string model_type_str = this->get_parameter("model_type").as_string();
     if (model_type_str == "pytorch") {
@@ -148,6 +171,16 @@ void PiperRLController::initializeRobot() {
     current_obs_.joint_efforts.resize(joint_names_.size(), 0.0);
     current_obs_.actions_history.resize(action_dim_, 0.0);
     
+    // 初始化位置信息
+    current_obs_.handkerchief_position.resize(3, 0.0);
+    current_obs_.handkerchief_velocity.resize(3, 0.0);
+    current_obs_.robot_base_position.resize(3, 0.0);
+    current_obs_.robot_base_orientation.resize(4, 0.0);
+    current_obs_.robot_base_orientation[3] = 1.0; // 初始化为单位四元数 [0,0,0,1]
+    current_obs_.handkerchief_world_position.resize(3, 0.0);
+    current_obs_.handkerchief_world_orientation.resize(4, 0.0);
+    current_obs_.handkerchief_world_orientation[3] = 1.0; // 初始化为单位四元数 [0,0,0,1]
+    
     // 初始化控制指令
     current_cmd_.joint_positions.resize(joint_names_.size(), 0.0);
     current_cmd_.joint_velocities.resize(joint_names_.size(), 0.0);
@@ -183,6 +216,78 @@ void PiperRLController::jointStateCallback(const sensor_msgs::msg::JointState::S
             }
         }
     }
+}
+
+void PiperRLController::robotBasePoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+    // 更新机械臂底座在世界坐标系下的位置和姿态
+    current_obs_.robot_base_position[0] = static_cast<float>(msg->pose.position.x);
+    current_obs_.robot_base_position[1] = static_cast<float>(msg->pose.position.y);
+    current_obs_.robot_base_position[2] = static_cast<float>(msg->pose.position.z);
+    
+    current_obs_.robot_base_orientation[0] = static_cast<float>(msg->pose.orientation.x);
+    current_obs_.robot_base_orientation[1] = static_cast<float>(msg->pose.orientation.y);
+    current_obs_.robot_base_orientation[2] = static_cast<float>(msg->pose.orientation.z);
+    current_obs_.robot_base_orientation[3] = static_cast<float>(msg->pose.orientation.w);
+    
+    // 重新计算手绢在机械臂底座坐标系下的位置
+    current_obs_.handkerchief_position = computeRelativePosition(
+        current_obs_.handkerchief_world_position,
+        current_obs_.robot_base_position,
+        current_obs_.robot_base_orientation
+    );
+    
+    RCLCPP_DEBUG(this->get_logger(), "Robot base pose updated: [%.3f, %.3f, %.3f]", 
+                 current_obs_.robot_base_position[0], 
+                 current_obs_.robot_base_position[1], 
+                 current_obs_.robot_base_position[2]);
+}
+
+void PiperRLController::handkerchiefPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+    // 保存上一次的位置用于计算速度
+    static std::vector<float> prev_position = {0.0f, 0.0f, 0.0f};
+    static auto prev_time = this->now();
+    
+    // 更新手绢在世界坐标系下的位置和姿态
+    current_obs_.handkerchief_world_position[0] = static_cast<float>(msg->pose.position.x);
+    current_obs_.handkerchief_world_position[1] = static_cast<float>(msg->pose.position.y);
+    current_obs_.handkerchief_world_position[2] = static_cast<float>(msg->pose.position.z);
+    
+    current_obs_.handkerchief_world_orientation[0] = static_cast<float>(msg->pose.orientation.x);
+    current_obs_.handkerchief_world_orientation[1] = static_cast<float>(msg->pose.orientation.y);
+    current_obs_.handkerchief_world_orientation[2] = static_cast<float>(msg->pose.orientation.z);
+    current_obs_.handkerchief_world_orientation[3] = static_cast<float>(msg->pose.orientation.w);
+    
+    // 计算手绢在机械臂底座坐标系下的位置
+    current_obs_.handkerchief_position = computeRelativePosition(
+        current_obs_.handkerchief_world_position,
+        current_obs_.robot_base_position,
+        current_obs_.robot_base_orientation
+    );
+    
+    // 添加z轴机械偏置
+    current_obs_.handkerchief_position[2] += handkerchief_z_offset_;
+    
+    // 计算速度 (简单的数值微分)
+    auto current_time = this->now();
+    double dt = (current_time - prev_time).seconds();
+    
+    if (dt > 0.001) { // 避免除以很小的数
+        for (int i = 0; i < 3; ++i) {
+            current_obs_.handkerchief_velocity[i] = 
+                (current_obs_.handkerchief_position[i] - prev_position[i]) / static_cast<float>(dt);
+        }
+        
+        prev_position = current_obs_.handkerchief_position;
+        prev_time = current_time;
+    }
+    
+    RCLCPP_INFO(this->get_logger(), "Handkerchief pose updated - World: [%.3f, %.3f, %.3f], Relative: [%.3f, %.3f, %.3f]", 
+                 current_obs_.handkerchief_world_position[0], 
+                 current_obs_.handkerchief_world_position[1], 
+                 current_obs_.handkerchief_world_position[2],
+                 current_obs_.handkerchief_position[0],
+                 current_obs_.handkerchief_position[1],
+                 current_obs_.handkerchief_position[2]);
 }
 
 void PiperRLController::controlLoop() {
@@ -272,49 +377,24 @@ void PiperRLController::inferenceLoop() {
 
 std::vector<float> PiperRLController::computeObservation() {
     std::vector<float> obs;
-    
-    // 根据您的描述，观测包括：
     // 1. 机械臂的6轴角度 (6维)
-    // 2. 手绢的位置 (3维) - 使用正弦波动
-    // 3. 手绢的速度 (3维) - 对应的速度波动
+    // 2. 手绢在机械臂底座坐标系下的位置 (3维)
+    // 3. 手绢在机械臂底座坐标系下的速度 (3维)
     // 总共12维观测
     
     // 1. 机械臂6轴角度
     obs.insert(obs.end(), current_obs_.joint_positions.begin(), current_obs_.joint_positions.end());
+
+    // 2. 手绢在机械臂底座坐标系下的位置 (3维)
+    obs.insert(obs.end(), current_obs_.handkerchief_position.begin(), current_obs_.handkerchief_position.end());
     
-    // 获取当前时间用于正弦波动
-    double current_time = this->now().seconds();
+    // 3. 手绢在机械臂底座坐标系下的速度 (3维)
+    obs.insert(obs.end(), current_obs_.handkerchief_velocity.begin(), current_obs_.handkerchief_velocity.end());
     
-    // 2. 手绢位置 (3维) - 使用正弦函数产生波动，范围在0.1米内
-    float base_x = 0.016f;
-    float base_y = -0.34f;
-    float base_z = 0.57f;
-    
-    // 使用不同频率的正弦波来模拟手绢的自然摆动
-    float x_amplitude = 0.05f;  // 0.1米范围内，所以振幅是0.05米
-    float y_amplitude = 0.05f;
-    float z_amplitude = 0.05f;
-    
-    float x_freq = 0.5f;  // 频率 (Hz)
-    float y_freq = 0.7f;  // 不同频率避免同步
-    float z_freq = 0.3f;
-    
-    float handkerchief_x = base_x + x_amplitude * std::sin(2.0f * M_PI * x_freq * current_time);
-    float handkerchief_y = base_y + y_amplitude * std::sin(2.0f * M_PI * y_freq * current_time);
-    float handkerchief_z = base_z + z_amplitude * std::sin(2.0f * M_PI * z_freq * current_time);
-    
-    obs.push_back(handkerchief_x);  // x位置
-    obs.push_back(handkerchief_y);  // y位置
-    obs.push_back(handkerchief_z);  // z位置
-    
-    // 3. 手绢速度 (3维) - 对应位置的导数（速度）
-    float handkerchief_vx = x_amplitude * 2.0f * M_PI * x_freq * std::cos(2.0f * M_PI * x_freq * current_time);
-    float handkerchief_vy = y_amplitude * 2.0f * M_PI * y_freq * std::cos(2.0f * M_PI * y_freq * current_time);
-    float handkerchief_vz = z_amplitude * 2.0f * M_PI * z_freq * std::cos(2.0f * M_PI * z_freq * current_time);
-    
-    obs.push_back(handkerchief_vx);  // x速度
-    obs.push_back(handkerchief_vy);  // y速度
-    obs.push_back(handkerchief_vz);  // z速度
+    RCLCPP_DEBUG(this->get_logger(), "Observation computed - Joint pos: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f], "
+                 "Handkerchief pos: [%.3f, %.3f, %.3f], vel: [%.3f, %.3f, %.3f]",
+                 obs[0], obs[1], obs[2], obs[3], obs[4], obs[5],
+                 obs[6], obs[7], obs[8], obs[9], obs[10], obs[11]);
     
     return obs;
 }
@@ -417,6 +497,63 @@ std::vector<float> PiperRLController::clipActions(const std::vector<float>& acti
     }
     
     return clipped;
+}
+
+std::vector<float> PiperRLController::computeRelativePosition(const std::vector<float>& world_pos, 
+                                                             const std::vector<float>& base_pos, 
+                                                             const std::vector<float>& base_quat) {
+    std::vector<float> relative_pos(3, 0.0f);
+    
+    // 检查输入向量的大小
+    if (world_pos.size() < 3 || base_pos.size() < 3 || base_quat.size() < 4) {
+        RCLCPP_WARN(this->get_logger(), "Invalid input sizes for coordinate transformation");
+        return relative_pos;
+    }
+    
+    // 计算世界坐标到底座坐标的平移
+    float dx = world_pos[0] - base_pos[0];
+    float dy = world_pos[1] - base_pos[1];
+    float dz = world_pos[2] - base_pos[2];
+    
+    // 从四元数创建旋转矩阵（底座坐标系到世界坐标系的旋转）
+    // 我们需要的是逆变换（世界坐标系到底座坐标系）
+    float qx = base_quat[0];
+    float qy = base_quat[1];
+    float qz = base_quat[2];
+    float qw = base_quat[3];
+    
+    // 归一化四元数
+    float norm = std::sqrt(qx*qx + qy*qy + qz*qz + qw*qw);
+    if (norm > 0.0001f) {
+        qx /= norm;
+        qy /= norm;
+        qz /= norm;
+        qw /= norm;
+    } else {
+        // 默认为单位四元数
+        qx = qy = qz = 0.0f;
+        qw = 1.0f;
+    }
+    
+    // 旋转矩阵的逆（转置），将世界坐标转换到底座坐标
+    float r11 = 1.0f - 2.0f*(qy*qy + qz*qz);
+    float r12 = 2.0f*(qx*qy + qw*qz);
+    float r13 = 2.0f*(qx*qz - qw*qy);
+    
+    float r21 = 2.0f*(qx*qy - qw*qz);
+    float r22 = 1.0f - 2.0f*(qx*qx + qz*qz);
+    float r23 = 2.0f*(qy*qz + qw*qx);
+    
+    float r31 = 2.0f*(qx*qz + qw*qy);
+    float r32 = 2.0f*(qy*qz - qw*qx);
+    float r33 = 1.0f - 2.0f*(qx*qx + qy*qy);
+    
+    // 应用逆旋转变换
+    relative_pos[0] = r11*dx + r21*dy + r31*dz;
+    relative_pos[1] = r12*dx + r22*dy + r32*dz;
+    relative_pos[2] = r13*dx + r23*dy + r33*dz;
+    
+    return relative_pos;
 }
 
 } // namespace piper_rl_deploy

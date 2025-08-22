@@ -2,6 +2,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/float32_multi_array.hpp>
@@ -23,6 +24,14 @@ struct RobotObservation {
     std::vector<float> joint_velocities;
     std::vector<float> joint_efforts;
     std::vector<float> actions_history;
+    
+    // 位置信息
+    std::vector<float> handkerchief_position;     // 手绢在机械臂底座坐标系下的位置 (x, y, z)
+    std::vector<float> handkerchief_velocity;     // 手绢在机械臂底座坐标系下的速度 (vx, vy, vz)
+    std::vector<float> robot_base_position;       // 机械臂底座在世界坐标系下的位置
+    std::vector<float> robot_base_orientation;    // 机械臂底座在世界坐标系下的姿态(四元数)
+    std::vector<float> handkerchief_world_position; // 手绢在世界坐标系下的位置
+    std::vector<float> handkerchief_world_orientation; // 手绢在世界坐标系下的姿态(四元数)
 };
 
 struct RobotCommand {
@@ -41,6 +50,8 @@ public:
 private:
     // ROS 订阅和发布
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr robot_base_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr handkerchief_pose_sub_;
     
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr action_pub_;
@@ -73,6 +84,13 @@ private:
     ModelType model_type_;
     bool use_history_;
     
+    // 话题名称
+    std::string robot_base_pose_topic_;
+    std::string handkerchief_pose_topic_;
+    
+    // 机械偏置参数
+    float handkerchief_z_offset_;
+    
     // 关节配置
     std::vector<std::string> joint_names_;
     std::vector<double> default_kp_;
@@ -87,6 +105,8 @@ private:
     
     // 回调函数
     void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
+    void robotBasePoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    void handkerchiefPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     
     // 控制循环
     void controlLoop();
@@ -110,6 +130,11 @@ private:
     std::vector<float> quaternionToEuler(const std::vector<float>& quat);
     std::vector<float> normalizeObservation(const std::vector<float>& obs);
     std::vector<float> clipActions(const std::vector<float>& actions);
+    
+    // 坐标变换
+    std::vector<float> computeRelativePosition(const std::vector<float>& world_pos, 
+                                             const std::vector<float>& base_pos, 
+                                             const std::vector<float>& base_quat);
 };
 
 } // namespace piper_rl_deploy

@@ -45,6 +45,19 @@ def generate_launch_description():
         description='Use simulation time'
     )
     
+    # 话题名称参数
+    robot_base_pose_topic_arg = DeclareLaunchArgument(
+        'robot_base_pose_topic',
+        default_value='/robot_base_pose',
+        description='Topic name for robot base pose (geometry_msgs/PoseStamped)'
+    )
+    
+    handkerchief_pose_topic_arg = DeclareLaunchArgument(
+        'handkerchief_pose_topic',
+        default_value='/handkerchief_pose',
+        description='Topic name for handkerchief pose (geometry_msgs/PoseStamped)'
+    )
+    
     # Piper RL 控制节点
     piper_rl_node = Node(
         package='piper_rl_deploy',
@@ -57,6 +70,8 @@ def generate_launch_description():
                 'model_path': LaunchConfiguration('model_path'),
                 'model_type': LaunchConfiguration('model_type'),
                 'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'robot_base_pose_topic': LaunchConfiguration('robot_base_pose_topic'),
+                'handkerchief_pose_topic': LaunchConfiguration('handkerchief_pose_topic'),
             }
         ],
         remappings=[
@@ -70,5 +85,7 @@ def generate_launch_description():
         model_type_arg,
         config_file_arg,
         use_sim_time_arg,
+        robot_base_pose_topic_arg,
+        handkerchief_pose_topic_arg,
         piper_rl_node,
     ])
