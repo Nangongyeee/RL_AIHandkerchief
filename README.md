@@ -45,18 +45,39 @@ cd ~/RL_AIHandkerchief
 
 ## piper_sdk相关包
 
-参考https://github.com/agilexrobotics/piper_ros.git的humble分支
+参考https://github.com/agilexrobotics/piper_ros.git的humble分支配置环境
 
 ## piper_rl_deploy配置
 
-参考https://github.com/fan-ziqi/rl_sar.git
+参考https://github.com/fan-ziqi/rl_sar.git配置环境
 
+### 使用说明
 
-### 常见问题
+1. **准备模型文件**：将你训练好的 PyTorch (.pt) 或 ONNX (.onnx) 模型放入 `src/piper_rl_deploy/models/` 目录。
 
-**错误: `KeyError: 'VICON_IP'`**
-- 原因: 缺少 VICON_IP 环境变量
-- 解决: 设置 `export VICON_IP=你的Vicon系统IP` Isaac Lab 环境。
+2. **配置参数**：编辑 `src/piper_rl_deploy/config/piper_rl_config.yaml`，设置 `model_path`、`model_type`、`obs_dim`、`action_dim`、`joint_names` 等参数，确保与实际模型和机器人配置一致。
+
+3. **构建包**：
+```bash
+colcon build --packages-select piper_rl_deploy
+```
+1. **修改话题名称**：根据需要修改 `src/piper_rl_deploy/config/piper_rl_config.yaml`中的话题名称。
+
+2. **启动部署**：
+```bash
+ros2 launch piper_rl_deploy piper_rl_deploy.launch.py
+```
+
+1. **高级用法**：
+```bash
+可通过 `model_path`、`model_type`、`config_file` 等参数自定义模型和配置文件：
+```bash
+ros2 launch piper_rl_deploy piper_rl_deploy.launch.py \
+	model_path:=models/your_model.pt \
+	model_type:=pytorch
+```
+
+更多详细功能和接口说明请参考 `src/piper_rl_deploy/README.md`。
 
 ## 环境要求
 
@@ -120,9 +141,14 @@ ros2 launch vicon_bridge start_vicon_bridge.launch.py
 ros2 launch piper_rl_deploy piper_rl_deploy.launch.py
 
 ```
-
-
 ---
+
+### 常见问题
+
+**错误: `KeyError: 'VICON_IP'`**
+- 原因: 缺少 VICON_IP 环境变量
+- 解决: 设置 `export VICON_IP=你的Vicon系统IP` Isaac Lab 环境。
+- 
 
 **项目链接:** https://github.com/Nangongyeee/RL_AIHandkerchief
 
