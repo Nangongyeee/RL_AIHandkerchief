@@ -48,13 +48,13 @@ def generate_launch_description():
     # 话题名称参数
     robot_base_pose_topic_arg = DeclareLaunchArgument(
         'robot_base_pose_topic',
-        default_value='/robot_base_pose',
+        default_value='/vicon/root0822/root0822',
         description='Topic name for robot base pose (geometry_msgs/PoseStamped)'
     )
     
     handkerchief_pose_topic_arg = DeclareLaunchArgument(
         'handkerchief_pose_topic',
-        default_value='/handkerchief_pose',
+        default_value='/vicon/cloth082201/cloth082201',
         description='Topic name for handkerchief pose (geometry_msgs/PoseStamped)'
     )
     

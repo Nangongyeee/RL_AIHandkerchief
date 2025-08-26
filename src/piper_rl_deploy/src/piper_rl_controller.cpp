@@ -97,7 +97,6 @@ void PiperRLController::loadParameters() {
     // 话题名称参数
     this->declare_parameter("robot_base_pose_topic", "/robot_base_pose");
     this->declare_parameter("handkerchief_pose_topic", "/handkerchief_pose");
-    this->declare_parameter("handkerchief_z_offset", 0.09);
     
     // 获取参数
     control_frequency_ = this->get_parameter("control_frequency").as_double();
@@ -111,7 +110,6 @@ void PiperRLController::loadParameters() {
     // 话题名称
     robot_base_pose_topic_ = this->get_parameter("robot_base_pose_topic").as_string();
     handkerchief_pose_topic_ = this->get_parameter("handkerchief_pose_topic").as_string();
-    handkerchief_z_offset_ = static_cast<float>(this->get_parameter("handkerchief_z_offset").as_double());
     
     std::string model_type_str = this->get_parameter("model_type").as_string();
     if (model_type_str == "pytorch") {
@@ -264,9 +262,6 @@ void PiperRLController::handkerchiefPoseCallback(const geometry_msgs::msg::PoseS
         current_obs_.robot_base_orientation
     );
     
-    // 添加z轴机械偏置
-    current_obs_.handkerchief_position[2] += handkerchief_z_offset_;
-    
     // 计算速度 (简单的数值微分)
     auto current_time = this->now();
     double dt = (current_time - prev_time).seconds();
@@ -377,6 +372,8 @@ void PiperRLController::inferenceLoop() {
 
 std::vector<float> PiperRLController::computeObservation() {
     std::vector<float> obs;
+    
+    // 根据您的描述，观测包括：
     // 1. 机械臂的6轴角度 (6维)
     // 2. 手绢在机械臂底座坐标系下的位置 (3维)
     // 3. 手绢在机械臂底座坐标系下的速度 (3维)
@@ -384,7 +381,7 @@ std::vector<float> PiperRLController::computeObservation() {
     
     // 1. 机械臂6轴角度
     obs.insert(obs.end(), current_obs_.joint_positions.begin(), current_obs_.joint_positions.end());
-
+    
     // 2. 手绢在机械臂底座坐标系下的位置 (3维)
     obs.insert(obs.end(), current_obs_.handkerchief_position.begin(), current_obs_.handkerchief_position.end());
     
