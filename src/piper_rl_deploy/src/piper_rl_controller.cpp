@@ -39,6 +39,12 @@ PiperRLController::PiperRLController(const std::string& node_name)
         handkerchief_pose_topic_, 10,
         std::bind(&PiperRLController::handkerchiefPoseCallback, this, std::placeholders::_1)
     );
+    
+    // 订阅机械臂末端位置
+    end_pose_sub_ = this->create_subscription<geometry_msgs::msg::Pose>(
+        "/end_pose", 10,
+        std::bind(&PiperRLController::endPoseCallback, this, std::placeholders::_1)
+    );
 
     // 发布关节控制命令到piper节点期望的话题
     joint_cmd_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
@@ -63,7 +69,6 @@ PiperRLController::PiperRLController(const std::string& node_name)
 }
 
 PiperRLController::~PiperRLController() {
-    // 优雅关闭
     emergency_stop_ = true;
     
     // 停止定时器
@@ -90,7 +95,7 @@ void PiperRLController::loadParameters() {
     this->declare_parameter("model_path", "");
     this->declare_parameter("model_type", "pytorch");
     this->declare_parameter("use_history", false);    // 训练代码没有使用历史
-    this->declare_parameter("obs_dim", 12);           // 6(关节角度) + 3(手绢位置) + 3(手绢速度) 
+    this->declare_parameter("obs_dim", 21);           // 6(关节角度) + 6(关节速度) + 3(末端位置) + 3(手绢位置) + 3(手绢速度) 
     this->declare_parameter("action_dim", 6);         // 6个关节
     this->declare_parameter("history_length", 1);     // 不使用历史
     
@@ -178,6 +183,7 @@ void PiperRLController::initializeRobot() {
     current_obs_.handkerchief_world_position.resize(3, 0.0);
     current_obs_.handkerchief_world_orientation.resize(4, 0.0);
     current_obs_.handkerchief_world_orientation[3] = 1.0; // 初始化为单位四元数 [0,0,0,1]
+    current_obs_.stick_tip_position.resize(3, 0.0); // 新增：机械臂末端位置
     
     // 初始化控制指令
     current_cmd_.joint_positions.resize(joint_names_.size(), 0.0);
@@ -373,19 +379,27 @@ void PiperRLController::inferenceLoop() {
 std::vector<float> PiperRLController::computeObservation() {
     std::vector<float> obs;
     
-    // 根据您的描述，观测包括：
-    // 1. 机械臂的6轴角度 (6维)
-    // 2. 手绢在机械臂底座坐标系下的位置 (3维)
-    // 3. 手绢在机械臂底座坐标系下的速度 (3维)
-    // 总共12维观测
+    // 观测包括：
+    // 1. robot_dof_pos - 机械臂的6轴角度 (6维)
+    // 2. robot_dof_vel - 机械臂的6轴速度 (6维)
+    // 3. stick_tip_pos - 机械臂末端位置 (3维)
+    // 4. handkerchief_root_pos_w - 手绢在世界坐标系下的位置 (3维)
+    // 5. handkerchief_root_vel_w - 手绢在世界坐标系下的速度 (3维)
+    // 总共21维观测
     
-    // 1. 机械臂6轴角度
+    // 1. 机械臂6轴角度 (robot_dof_pos)
     obs.insert(obs.end(), current_obs_.joint_positions.begin(), current_obs_.joint_positions.end());
     
-    // 2. 手绢在机械臂底座坐标系下的位置 (3维)
-    obs.insert(obs.end(), current_obs_.handkerchief_position.begin(), current_obs_.handkerchief_position.end());
+    // 2. 机械臂6轴速度 (robot_dof_vel) - 直接使用joint_velocities
+    obs.insert(obs.end(), current_obs_.joint_velocities.begin(), current_obs_.joint_velocities.end());
     
-    // 3. 手绢在机械臂底座坐标系下的速度 (3维)
+    // 3. 机械臂末端位置 (stick_tip_pos)
+    obs.insert(obs.end(), current_obs_.stick_tip_position.begin(), current_obs_.stick_tip_position.end());
+    
+    // 4. 手绢在世界坐标系下的位置 (handkerchief_root_pos_w)
+    obs.insert(obs.end(), current_obs_.handkerchief_world_position.begin(), current_obs_.handkerchief_world_position.end());
+    
+    // 5. 手绢在世界坐标系下的速度 (handkerchief_root_vel_w)
     obs.insert(obs.end(), current_obs_.handkerchief_velocity.begin(), current_obs_.handkerchief_velocity.end());
     
     RCLCPP_DEBUG(this->get_logger(), "Observation computed - Joint pos: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f], "
@@ -551,6 +565,57 @@ std::vector<float> PiperRLController::computeRelativePosition(const std::vector<
     relative_pos[2] = r13*dx + r23*dy + r33*dz;
     
     return relative_pos;
+}
+
+void PiperRLController::endPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg) {
+    // 获取机械臂末端电机的位置
+    float end_pos_x = static_cast<float>(msg->position.x);
+    float end_pos_y = static_cast<float>(msg->position.y);
+    float end_pos_z = static_cast<float>(msg->position.z);
+    
+    // 获取末端电机的方向四元数
+    float qx = static_cast<float>(msg->orientation.x);
+    float qy = static_cast<float>(msg->orientation.y);
+    float qz = static_cast<float>(msg->orientation.z);
+    float qw = static_cast<float>(msg->orientation.w);
+    
+    // 棍子在电机坐标系下的相对位置（沿z轴向前延伸17厘米）
+    std::vector<float> stick_end_b = {0.0f, 0.0f, 0.17f};
+    
+    // 应用四元数旋转，将棍子方向向量从机械臂末端坐标系转到世界坐标系
+    std::vector<float> stick_dir(3, 0.0f);
+    
+    // 四元数旋转应用公式（在C++中实现quat_apply）
+    // v' = q * v * q^(-1)，其中 * 表示四元数乘法
+    // 简化计算如下：
+    float vx = stick_end_b[0];
+    float vy = stick_end_b[1];
+    float vz = stick_end_b[2];
+    
+    float t2 = qw * qx;
+    float t3 = qw * qy;
+    float t4 = qw * qz;
+    float t5 = -qx * qx;
+    float t6 = qx * qy;
+    float t7 = qx * qz;
+    float t8 = -qy * qy;
+    float t9 = qy * qz;
+    float t10 = -qz * qz;
+    
+    stick_dir[0] = 2.0f * ((t8 + t10) * vx + (t6 - t4) * vy + (t3 + t7) * vz) + vx;
+    stick_dir[1] = 2.0f * ((t4 + t6) * vx + (t5 + t10) * vy + (t9 - t2) * vz) + vy;
+    stick_dir[2] = 2.0f * ((t7 - t3) * vx + (t2 + t9) * vy + (t5 + t8) * vz) + vz;
+    
+    // 计算棍子末端真正的位置：末端电机位置 + 棍子方向向量
+    current_obs_.stick_tip_position[0] = end_pos_x + stick_dir[0];
+    current_obs_.stick_tip_position[1] = end_pos_y + stick_dir[1];
+    current_obs_.stick_tip_position[2] = end_pos_z + stick_dir[2];
+    
+    RCLCPP_DEBUG(this->get_logger(), "End motor position: [%.3f, %.3f, %.3f], Stick tip position: [%.3f, %.3f, %.3f]", 
+                 end_pos_x, end_pos_y, end_pos_z,
+                 current_obs_.stick_tip_position[0], 
+                 current_obs_.stick_tip_position[1], 
+                 current_obs_.stick_tip_position[2]);
 }
 
 } // namespace piper_rl_deploy

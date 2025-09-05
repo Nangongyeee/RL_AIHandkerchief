@@ -32,6 +32,9 @@ struct RobotObservation {
     std::vector<float> robot_base_orientation;    // 机械臂底座在世界坐标系下的姿态(四元数)
     std::vector<float> handkerchief_world_position; // 手绢在世界坐标系下的位置
     std::vector<float> handkerchief_world_orientation; // 手绢在世界坐标系下的姿态(四元数)
+    
+    // 新增观测
+    std::vector<float> stick_tip_position;       // 机械臂末端位置 (3维)
 };
 
 struct RobotCommand {
@@ -52,6 +55,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr robot_base_pose_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr handkerchief_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr end_pose_sub_; 
     
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr action_pub_;
@@ -107,6 +111,7 @@ private:
     void jointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void robotBasePoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
     void handkerchiefPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    void endPoseCallback(const geometry_msgs::msg::Pose::SharedPtr msg); // 添加末端位置回调函数
     
     // 控制循环
     void controlLoop();
