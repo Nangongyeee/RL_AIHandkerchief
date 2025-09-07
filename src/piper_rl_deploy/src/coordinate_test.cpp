@@ -315,8 +315,8 @@ private:
             RCLCPP_DEBUG(this->get_logger(), "Processing end effector pose data");
             
             // /end_pose 话题发布的数据已经是在机械臂基座坐标系下的位姿
-            // 直接使用这些数据作为在 Piper_root 坐标系下的位置和姿态
-            Eigen::Vector3d end_effector_in_piper(
+            // 首先获取原始的末端执行器位置和姿态
+            Eigen::Vector3d end_effector_base_pos(
                 end_effector_pose_->position.x,
                 end_effector_pose_->position.y,
                 end_effector_pose_->position.z
@@ -327,6 +327,12 @@ private:
                 end_effector_pose_->orientation.y,
                 end_effector_pose_->orientation.z
             );
+            
+            // 沿着末端执行器自身坐标系的 z 轴移动 17cm
+            Eigen::Matrix3d end_effector_rotation = end_effector_quat_in_piper.toRotationMatrix();
+            Eigen::Vector3d z_axis_direction = end_effector_rotation.col(2); // 末端执行器的 z 轴方向
+            Eigen::Vector3d offset = 0.17 * z_axis_direction; // 17cm 偏移
+            Eigen::Vector3d end_effector_in_piper = end_effector_base_pos + offset;
             
             // 发布机械臂末端在 Piper_root 坐标系下的位姿
             geometry_msgs::msg::PoseStamped end_effector_piperroot;
