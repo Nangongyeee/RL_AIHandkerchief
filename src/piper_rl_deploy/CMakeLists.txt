@@ -11,12 +11,14 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 # Find PyTorch (LibTorch) - 参考 rl_sar 的写法
 find_package(Torch REQUIRED)
+find_package(Eigen3 REQUIRED)
 message(STATUS "Found PyTorch: ${TORCH_LIBRARIES}")
 set(USE_PYTORCH ON)
 
@@ -71,8 +73,19 @@ ament_target_dependencies(piper_rl_node
 # Link the model_loader library instead of PyTorch directly
 target_link_libraries(piper_rl_node model_loader_lib)
 
+# Create coordinate_test executable
+add_executable(coordinate_test src/coordinate_test.cpp)
+ament_target_dependencies(coordinate_test 
+  rclcpp 
+  geometry_msgs 
+  visualization_msgs
+  tf2_ros
+  tf2_geometry_msgs
+)
+target_link_libraries(coordinate_test Eigen3::Eigen)
+
 # Install targets
-install(TARGETS piper_rl_node model_loader_lib
+install(TARGETS piper_rl_node coordinate_test model_loader_lib
   DESTINATION lib/${PROJECT_NAME}
 )
 
