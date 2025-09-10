@@ -20,6 +20,12 @@ CoordinateTestNode::CoordinateTestNode()
         std::bind(&CoordinateTestNode::endEffectorCallback, this, std::placeholders::_1)
     );
 
+    // 订阅 Vicon markers 数据
+    markers_sub_ = this->create_subscription<vicon_msgs::msg::Markers>(
+        "/vicon/markers", 10,
+        std::bind(&CoordinateTestNode::markersCallback, this, std::placeholders::_1)
+    );
+
     // 去掉重复的 pos 和 vel 发布，只保留更完整的消息格式
     vel_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("handkerchief_velocity", 10);
     root_new_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("Piper_root", 10);
@@ -27,6 +33,9 @@ CoordinateTestNode::CoordinateTestNode()
     
     // 机械臂末端位姿发布者
     end_effector_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("end_effector_piperroot", 10);
+    
+    // 8个目标markers位置发布者
+    markers_pub_ = this->create_publisher<geometry_msgs::msg::PoseArray>("target_markers_positions", 10);
     
     timer_ = this->create_wall_timer(
         std::chrono::milliseconds(20),
@@ -48,29 +57,62 @@ void CoordinateTestNode::endEffectorCallback(const geometry_msgs::msg::Pose::Sha
     end_effector_pose_ = msg;
 }
 
-void CoordinateTestNode::publishData() {
-        if (!root_pose_ || !handkerchief_pose_) return;
+void CoordinateTestNode::markersCallback(const vicon_msgs::msg::Markers::SharedPtr msg) {
+    markers_data_ = msg;
+    
+    // 处理特定的 markers
+    processSpecificMarkers();
+    
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                          "Received %zu markers in frame %u", 
+                          msg->markers.size(), msg->frame_number);
+}
 
-        // 1. 获取原 root0907 的位置和姿态
-        Eigen::Vector3d root_position(
-            root_pose_->pose.position.x, 
-            root_pose_->pose.position.y, 
-            root_pose_->pose.position.z
-        );
-        // 获取原 root0907 的四元数姿态
-        Eigen::Quaterniond root_quat(
+void CoordinateTestNode::publishData() {
+        if (!handkerchief_pose_) return;
+
+        // 1. 使用root markers几何中心作为位置，但四元数始终使用原始root pose
+        Eigen::Vector3d root_position;
+        Eigen::Quaterniond root_quat;
+        
+        if (!root_pose_) {
+            // 没有原始root pose，无法获取四元数
+            return;
+        }
+        
+        // 四元数始终使用原始root pose
+        root_quat = Eigen::Quaterniond(
             root_pose_->pose.orientation.w,
             root_pose_->pose.orientation.x,
             root_pose_->pose.orientation.y,
             root_pose_->pose.orientation.z
         );
+        
+        if (root_markers_center_valid_) {
+            // 位置使用计算出的root markers几何中心
+            root_position = Eigen::Vector3d(
+                root_markers_center_.x, 
+                root_markers_center_.y, 
+                root_markers_center_.z
+            );
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                 "Using root markers center: [%.4f, %.4f, %.4f]",
+                                 root_position.x(), root_position.y(), root_position.z());
+        } else {
+            // 位置使用原始root pose
+            root_position = Eigen::Vector3d(
+                root_pose_->pose.position.x, 
+                root_pose_->pose.position.y, 
+                root_pose_->pose.position.z
+            );
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                "Root markers center not available, using original root position");
+        }
 
-        // 构造旋转变换矩阵：先绕 y 轴逆时针转 90°，再绕 x 轴逆时针转 90° 
-        Eigen::AngleAxisd rot_y(M_PI/2, Eigen::Vector3d::UnitY());  // TODO.check
-        Eigen::AngleAxisd rot_x(M_PI, Eigen::Vector3d::UnitX());
-        Eigen::Quaterniond additional_rotation = rot_y * rot_x;
+        // 构造旋转变换矩阵：绕 y 轴逆时针转 90°
+        Eigen::AngleAxisd rot_y(-M_PI/2, Eigen::Vector3d::UnitY());  // TODO.check
         // 计算 Piper_root 坐标系的姿态四元数：原姿态 * 附加旋转
-        Eigen::Quaterniond piper_root_quat = root_quat * additional_rotation;
+        Eigen::Quaterniond piper_root_quat = root_quat * rot_y;
         Eigen::Matrix3d R = piper_root_quat.toRotationMatrix();
 
         // 计算 Piper_root 坐标系的位置：沿新坐标系 -z 轴平移 9mm
@@ -106,22 +148,47 @@ void CoordinateTestNode::publishData() {
         tf_broadcaster_->sendTransform(tf_msg);
 
         // 2. 计算手绢在 Piper_root 坐标系下的位置和姿态
-        // 获取手绢在世界坐标系下的位置、四元数
-        Eigen::Vector3d handkerchief_world(
-            handkerchief_pose_->pose.position.x, 
-            handkerchief_pose_->pose.position.y, 
-            handkerchief_pose_->pose.position.z
-        );
+        Eigen::Vector3d handkerchief_world;
         Eigen::Quaterniond handkerchief_quat(
             handkerchief_pose_->pose.orientation.w,
             handkerchief_pose_->pose.orientation.x,
             handkerchief_pose_->pose.orientation.y,
             handkerchief_pose_->pose.orientation.z
         );
-
-        // 位置平移调整（根据需要修改偏移量）
-        Eigen::Vector3d offset(0.02, 0.15, 0.0);  // x, y, z 方向的偏移量（单位：米）
-        handkerchief_world += offset;
+        
+        // 使用cloth markers几何中心作为手绢位置，如果无效则使用上一帧位置
+        if (cloth_markers_center_valid_) {
+            // 使用cloth markers几何中心
+            handkerchief_world = Eigen::Vector3d(
+                cloth_markers_center_.x,
+                cloth_markers_center_.y,
+                cloth_markers_center_.z
+            );
+            
+            // 更新上一帧位置
+            prev_handkerchief_position_ = handkerchief_world;
+            has_previous_handkerchief_position_ = true;
+            
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                 "Using cloth markers center: [%.4f, %.4f, %.4f]",
+                                 handkerchief_world.x(), handkerchief_world.y(), handkerchief_world.z());
+        } else if (has_previous_handkerchief_position_) {
+            // 使用上一帧位置
+            handkerchief_world = prev_handkerchief_position_;
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                "Cloth markers not available, using previous position: [%.4f, %.4f, %.4f]",
+                                handkerchief_world.x(), handkerchief_world.y(), handkerchief_world.z());
+        } else {
+            // 回退到原始handkerchief pose
+            handkerchief_world = Eigen::Vector3d(
+                handkerchief_pose_->pose.position.x, 
+                handkerchief_pose_->pose.position.y, 
+                handkerchief_pose_->pose.position.z
+            );
+            
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                "No cloth markers or previous position, using original handkerchief pose");
+        }
 
         // 手绢在 Piper_root 坐标系下的位置
         Eigen::Vector3d handkerchief_in_piper = R.transpose() * (handkerchief_world - piper_root_position);
@@ -286,6 +353,194 @@ void CoordinateTestNode::publishData() {
             RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No end effector pose data available");
         }
     }
+
+void CoordinateTestNode::processSpecificMarkers() {
+    if (!markers_data_) {
+        return;
+    }
+
+    // 定义我们要查找的特定 marker 名称
+    std::vector<std::string> target_markers = {
+        "root09081", "root09082", "root09083", "root09084",
+        "cloth09081", "cloth09082", "cloth09083", "cloth09084"
+    };
+
+    // 清空之前的位置数据
+    marker_positions_.clear();
+
+    // 查找并存储特定 markers 的位置
+    for (const auto& marker : markers_data_->markers) {
+        if (!marker.occluded) {  // 只处理可见的 markers
+            std::string marker_name = marker.marker_name;
+            
+            // 检查是否是我们需要的 marker
+            auto it = std::find(target_markers.begin(), target_markers.end(), marker_name);
+            if (it != target_markers.end()) {
+                // 存储 marker 位置，将毫米转换为米
+                geometry_msgs::msg::Point marker_pos;
+                marker_pos.x = marker.translation.x / 1000.0;
+                marker_pos.y = marker.translation.y / 1000.0;
+                marker_pos.z = marker.translation.z / 1000.0;
+                marker_positions_[marker_name] = marker_pos;
+                
+                RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                                     "Marker %s: [%.4f, %.4f, %.4f] (m)",
+                                     marker_name.c_str(),
+                                     marker_pos.x, 
+                                     marker_pos.y, 
+                                     marker_pos.z);
+                
+                // 发布 marker 的 TF 用于可视化（使用单位四元数，只显示位置点）
+                geometry_msgs::msg::TransformStamped marker_tf;
+                marker_tf.header.stamp = this->now();
+                marker_tf.header.frame_id = "vicon/World";
+                marker_tf.child_frame_id = "marker_" + marker_name;
+                marker_tf.transform.translation.x = marker_pos.x;
+                marker_tf.transform.translation.y = marker_pos.y;
+                marker_tf.transform.translation.z = marker_pos.z;
+                marker_tf.transform.rotation.w = 1.0;  // 单位四元数
+                marker_tf.transform.rotation.x = 0.0;
+                marker_tf.transform.rotation.y = 0.0;
+                marker_tf.transform.rotation.z = 0.0;
+                
+                tf_broadcaster_->sendTransform(marker_tf);
+            }
+        }
+    }
+
+    // 计算root markers的几何中心
+    std::vector<std::string> root_marker_names = {
+        "root09081", "root09082", "root09083", "root09084"
+    };
+    
+    Eigen::Vector3d root_center_sum(0.0, 0.0, 0.0);
+    int valid_root_markers = 0;
+    
+    for (const auto& root_marker_name : root_marker_names) {
+        auto it = marker_positions_.find(root_marker_name);
+        if (it != marker_positions_.end()) {
+            root_center_sum.x() += it->second.x;
+            root_center_sum.y() += it->second.y;
+            root_center_sum.z() += it->second.z;
+            valid_root_markers++;
+        }
+    }
+    
+    if (valid_root_markers >= 3) {  // 至少需要3个markers来计算中心
+        root_markers_center_.x = root_center_sum.x() / valid_root_markers;
+        root_markers_center_.y = root_center_sum.y() / valid_root_markers;
+        root_markers_center_.z = root_center_sum.z() / valid_root_markers;
+        root_markers_center_valid_ = true;
+        
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                             "Root center from %d markers: [%.4f, %.4f, %.4f] (m)",
+                             valid_root_markers,
+                             root_markers_center_.x, 
+                             root_markers_center_.y, 
+                             root_markers_center_.z);
+    } else {
+        root_markers_center_valid_ = false;
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                            "Insufficient root markers (%d/4) for center calculation", 
+                            valid_root_markers);
+    }
+    
+    // 计算cloth markers的几何中心
+    std::vector<std::string> cloth_marker_names = {
+        "cloth09081", "cloth09082", "cloth09083", "cloth09084"
+    };
+    
+    Eigen::Vector3d cloth_center_sum(0.0, 0.0, 0.0);
+    int valid_cloth_markers = 0;
+    
+    for (const auto& cloth_marker_name : cloth_marker_names) {
+        auto it = marker_positions_.find(cloth_marker_name);
+        if (it != marker_positions_.end()) {
+            cloth_center_sum.x() += it->second.x;
+            cloth_center_sum.y() += it->second.y;
+            cloth_center_sum.z() += it->second.z;
+            valid_cloth_markers++;
+        }
+    }
+    
+    if (valid_cloth_markers >= 1) {  // 至少需要1个marker来计算中心
+        cloth_markers_center_.x = cloth_center_sum.x() / valid_cloth_markers;
+        cloth_markers_center_.y = cloth_center_sum.y() / valid_cloth_markers;
+        cloth_markers_center_.z = cloth_center_sum.z() / valid_cloth_markers;
+        cloth_markers_center_valid_ = true;
+        
+        RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
+                             "Cloth center from %d markers: [%.4f, %.4f, %.4f] (m)",
+                             valid_cloth_markers,
+                             cloth_markers_center_.x, 
+                             cloth_markers_center_.y, 
+                             cloth_markers_center_.z);
+    } else {
+        cloth_markers_center_valid_ = false;
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                            "No cloth markers (%d/4) found for center calculation", 
+                            valid_cloth_markers);
+    }
+
+    // 输出找到的 markers 数量
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                         "Found %zu/8 target markers", marker_positions_.size());
+    
+    // 发布8个目标markers的位置信息
+    if (!marker_positions_.empty()) {
+        geometry_msgs::msg::PoseArray markers_array;
+        markers_array.header.stamp = this->now();
+        markers_array.header.frame_id = "vicon/World";
+        
+        // 按固定顺序添加markers，确保数组索引的一致性
+        for (const auto& marker_name : target_markers) {
+            auto it = marker_positions_.find(marker_name);
+            if (it != marker_positions_.end()) {
+                geometry_msgs::msg::Pose pose;
+                pose.position = it->second;  // 使用转换后的米单位坐标
+                pose.orientation.w = 1.0;    // 单位四元数
+                pose.orientation.x = 0.0;
+                pose.orientation.y = 0.0;
+                pose.orientation.z = 0.0;
+                markers_array.poses.push_back(pose);
+            } else {
+                // 如果某个marker不可见，添加零位置占位
+                geometry_msgs::msg::Pose pose;
+                pose.position.x = 0.0;
+                pose.position.y = 0.0;
+                pose.position.z = 0.0;
+                pose.orientation.w = 1.0;
+                pose.orientation.x = 0.0;
+                pose.orientation.y = 0.0;
+                pose.orientation.z = 0.0;
+                markers_array.poses.push_back(pose);
+            }
+        }
+        
+        markers_pub_->publish(markers_array);
+    }
+}
+
+const geometry_msgs::msg::Point* CoordinateTestNode::getMarkerPosition(const std::string& marker_name) const {
+    auto it = marker_positions_.find(marker_name);
+    if (it != marker_positions_.end()) {
+        return &it->second;
+    }
+    return nullptr;
+}
+
+const vicon_msgs::msg::Marker* CoordinateTestNode::findMarker(const std::string& marker_name) const {
+    if (!markers_data_) {
+        return nullptr;
+    }
+    
+    for (const auto& marker : markers_data_->markers) {
+        if (marker.marker_name == marker_name && !marker.occluded) {
+            return &marker;
+        }
+    }
+    return nullptr;
+}
 
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);

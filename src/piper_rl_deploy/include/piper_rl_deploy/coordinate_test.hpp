@@ -4,16 +4,22 @@
 #include <rclcpp/rclcpp.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/vector3.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <vicon_msgs/msg/markers.hpp>
+#include <vicon_msgs/msg/marker.hpp>
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 #include <cmath>
 #include <vector>
 #include <memory>
+#include <map>
+#include <string>
+#include <algorithm>
 
 /**
  * @brief CoordinateTestNode class for coordinate transformation and data publishing
@@ -43,6 +49,16 @@ private:
     geometry_msgs::msg::PoseStamped::SharedPtr root_pose_;           ///< Root pose from Vicon
     geometry_msgs::msg::PoseStamped::SharedPtr handkerchief_pose_;   ///< Handkerchief pose from Vicon
     geometry_msgs::msg::Pose::SharedPtr end_effector_pose_;          ///< End effector pose from robot
+    vicon_msgs::msg::Markers::SharedPtr markers_data_;               ///< All Vicon markers data
+    
+    // Specific marker coordinates storage
+    std::map<std::string, geometry_msgs::msg::Point> marker_positions_;
+    geometry_msgs::msg::Point root_markers_center_;                  ///< Geometric center of root markers
+    bool root_markers_center_valid_ = false;                        ///< Flag indicating if root center is valid
+    geometry_msgs::msg::Point cloth_markers_center_;                 ///< Geometric center of cloth markers
+    bool cloth_markers_center_valid_ = false;                       ///< Flag indicating if cloth center is valid
+    Eigen::Vector3d prev_handkerchief_position_{0.0, 0.0, 0.0};     ///< Previous handkerchief position for fallback
+    bool has_previous_handkerchief_position_ = false;               ///< Flag for valid previous position
     
     // Velocity calculation state
     std::vector<double> prev_relative_pos_{0.0, 0.0, 0.0};          ///< Previous handkerchief position in Piper_root frame
@@ -56,12 +72,14 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr root_sub_;           ///< Root pose subscriber
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr handkerchief_sub_;   ///< Handkerchief pose subscriber
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr end_effector_sub_;          ///< End effector pose subscriber
+    rclcpp::Subscription<vicon_msgs::msg::Markers>::SharedPtr markers_sub_;               ///< Vicon markers subscriber
     
     // Publishers
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr vel_twist_pub_;        ///< Handkerchief velocity publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr root_new_pub_;          ///< Piper_root pose publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr handkerchief_pub_;      ///< Handkerchief in Piper_root frame publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pub_;      ///< End effector in Piper_root frame publisher
+    rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr markers_pub_;            ///< 8 target markers positions publisher
     
     // Timer and TF broadcaster
     rclcpp::TimerBase::SharedPtr timer_;                                                  ///< Main processing timer
@@ -86,6 +104,12 @@ private:
      * @param msg Pose message from /end_pose topic
      */
     void endEffectorCallback(const geometry_msgs::msg::Pose::SharedPtr msg);
+
+    /**
+     * @brief Callback for Vicon markers data
+     * @param msg Markers message from /vicon/markers topic
+     */
+    void markersCallback(const vicon_msgs::msg::Markers::SharedPtr msg);
 
     // === Main Processing Functions ===
     
@@ -176,6 +200,25 @@ private:
         const Eigen::Vector3d& position,
         const Eigen::Quaterniond& orientation
     );
+
+    /**
+     * @brief Process specific markers and update marker positions map
+     */
+    void processSpecificMarkers();
+
+    /**
+     * @brief Get marker position by name
+     * @param marker_name Name of the marker
+     * @return Pointer to marker position if found, nullptr otherwise
+     */
+    const geometry_msgs::msg::Point* getMarkerPosition(const std::string& marker_name) const;
+
+    /**
+     * @brief Find a specific marker by name
+     * @param marker_name Name of the marker to find
+     * @return Pointer to marker if found, nullptr otherwise
+     */
+    const vicon_msgs::msg::Marker* findMarker(const std::string& marker_name) const;
 
     // === Constants ===
     static constexpr double MAX_VELOCITY = 3.0;        ///< Maximum allowed velocity (m/s)

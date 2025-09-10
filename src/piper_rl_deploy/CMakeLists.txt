@@ -15,6 +15,7 @@ find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
+find_package(vicon_msgs REQUIRED)
 
 # Find PyTorch (LibTorch) - 参考 rl_sar 的写法
 find_package(Torch REQUIRED)
@@ -81,6 +82,7 @@ ament_target_dependencies(coordinate_test
   visualization_msgs
   tf2_ros
   tf2_geometry_msgs
+  vicon_msgs
 )
 target_link_libraries(coordinate_test Eigen3::Eigen)
 
