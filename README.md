@@ -135,20 +135,49 @@ python test_mit_detailed.py
 
 # 测试 Vicon 数据桥接
 export VICON_IP=192.168.10.1
-ros2 launch vicon_bridge start_vicon_bridge.launch.py
+ros2 launch vicon_bridge2 vicon.launch.py
 
 # 启动RL部署程序
 ros2 launch piper_rl_deploy piper_rl_deploy.launch.py
 
 ```
+
+### Piper RL Safe Deploy 使用说明
+
+```bash
+# 1. 激活 CAN 接口
+cd /home/gift/piper_sdk/piper_sdk
+bash can_activate.sh can0 1000000
+
+# 2. 初始化位置
+python piper_ctrl_joint.py
+
+# 3. 测试 Vicon 数据桥接
+export VICON_IP=192.168.10.1
+ros2 launch vicon_bridge2 vicon.launch.py
+
+# 4. 链接 Piper（需要硬件连接）
+ros2 launch piper start_single_piper.launch.py
+
+# 5. 启动坐标测试
+ros2 launch piper_rl_deploy coordinate_test.launch.py
+
+# 6. 启动RL部署程序
+export LD_LIBRARY_PATH="/home/gift/libtorch/lib:$LD_LIBRARY_PATH" && ros2 launch piper_rl_deploy piper_rl_safe_deploy.launch.py
+
+```
+
 ---
 
 ### 常见问题
 
-**错误: `KeyError: 'VICON_IP'`**
+- **错误1：`KeyError: 'VICON_IP'`**
 - 原因: 缺少 VICON_IP 环境变量
 - 解决: 设置 `export VICON_IP=你的Vicon系统IP` Isaac Lab 环境。
-- 
+
+- **错误2：`libtorch`**
+- 原因: CMake在编译时找到了 libtorch 中的PyTorch库，但运行时系统的 LD_LIBRARY_PATH 中没有包含 lib，所以可执行文件找不到 libtorch_cpu.so 和 libtorch.so
+- 解决: 设置 `export LD_LIBRARY_PATH=/path/to/libtorch/lib:$LD_LIBRARY_PATH`，将 `/path/to/libtorch/lib` 替换为你的 libtorch 库路径。
 
 **项目链接:** https://github.com/Nangongyeee/RL_AIHandkerchief
 

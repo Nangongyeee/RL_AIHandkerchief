@@ -86,8 +86,22 @@ ament_target_dependencies(coordinate_test
 )
 target_link_libraries(coordinate_test Eigen3::Eigen)
 
+# Create piper_rl_safe_node executable
+add_executable(piper_rl_safe_node src/piper_rl_safe_node.cpp src/piper_rl_safe_controller.cpp)
+ament_target_dependencies(piper_rl_safe_node 
+  rclcpp 
+  std_msgs 
+  geometry_msgs 
+  sensor_msgs 
+  tf2 
+  tf2_ros 
+  tf2_geometry_msgs
+)
+# Link the model_loader library for safe controller
+target_link_libraries(piper_rl_safe_node model_loader_lib)
+
 # Install targets
-install(TARGETS piper_rl_node coordinate_test model_loader_lib
+install(TARGETS piper_rl_node coordinate_test piper_rl_safe_node model_loader_lib
   DESTINATION lib/${PROJECT_NAME}
 )
 

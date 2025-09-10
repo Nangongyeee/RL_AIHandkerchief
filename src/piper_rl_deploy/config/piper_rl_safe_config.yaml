@@ -1,0 +1,28 @@
+# Piper RL Safe Controller Configuration
+# This configuration is for the simplified safe controller that directly
+# subscribes to coordinate_test published topics without coordinate transformations
+
+piper_rl_safe_controller:
+  ros__parameters:
+    # Model configuration
+    model_path: ""  # Set this to your model file path
+    model_type: "pytorch"  # "pytorch" or "onnx"
+    
+    # Control frequencies
+    control_frequency: 200.0    # Hz
+    inference_frequency: 50.0   # Hz
+    
+    # Observation and action dimensions
+    obs_dim: 21     # 6(joint_pos) + 6(joint_vel) + 3(end_pos) + 3(handkerchief_pos) + 3(handkerchief_vel)
+    action_dim: 6   # 6 joints
+    
+    # Joint configuration
+    joint_names: ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+    
+    # PD control gains
+    default_kp: [80.0, 80.0, 80.0, 80.0, 80.0, 80.0]
+    default_kd: [2.0, 2.0, 1.0, 1.0, 1.0, 2.0]
+    
+    # Action scaling and offsets
+    action_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    joint_pos_offset: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
