@@ -6,11 +6,11 @@ CoordinateTestNode::CoordinateTestNode()
     : Node("coordinate_test_node")
 {
     root_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-        "/vicon/root0908/root0908", 10,
+        "/vicon/root0910/root0910", 10,
         std::bind(&CoordinateTestNode::rootCallback, this, std::placeholders::_1)
     );
     handkerchief_sub_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
-        "/vicon/cloth0908/cloth0908", 10,
+        "/vicon/cloth/cloth", 10,
         std::bind(&CoordinateTestNode::handkerchiefCallback, this, std::placeholders::_1)
     );
     
@@ -110,9 +110,10 @@ void CoordinateTestNode::publishData() {
         }
 
         // 构造旋转变换矩阵：绕 y 轴逆时针转 90°
-        Eigen::AngleAxisd rot_y(-M_PI/2, Eigen::Vector3d::UnitY());  // TODO.check
+        Eigen::AngleAxisd rot_z(-M_PI/2, Eigen::Vector3d::UnitZ());  // TODO.check
+        Eigen::AngleAxisd rot_x(M_PI/2, Eigen::Vector3d::UnitX());  // TODO.check
         // 计算 Piper_root 坐标系的姿态四元数：原姿态 * 附加旋转
-        Eigen::Quaterniond piper_root_quat = root_quat * rot_y;
+        Eigen::Quaterniond piper_root_quat = root_quat * rot_z * rot_x;
         Eigen::Matrix3d R = piper_root_quat.toRotationMatrix();
 
         // 计算 Piper_root 坐标系的位置：沿新坐标系 -z 轴平移 9mm
@@ -361,8 +362,8 @@ void CoordinateTestNode::processSpecificMarkers() {
 
     // 定义我们要查找的特定 marker 名称
     std::vector<std::string> target_markers = {
-        "root09081", "root09082", "root09083", "root09084",
-        "cloth09081", "cloth09082", "cloth09083", "cloth09084"
+        "root09101", "root09102", "root09103", "root09104",
+        "cloth1", "cloth2", "cloth3", "cloth4", "cloth5", "cloth6", "cloth7"
     };
 
     // 清空之前的位置数据
@@ -410,7 +411,7 @@ void CoordinateTestNode::processSpecificMarkers() {
 
     // 计算root markers的几何中心
     std::vector<std::string> root_marker_names = {
-        "root09081", "root09082", "root09083", "root09084"
+        "root09101", "root09102", "root09103", "root09104"
     };
     
     Eigen::Vector3d root_center_sum(0.0, 0.0, 0.0);
@@ -447,7 +448,7 @@ void CoordinateTestNode::processSpecificMarkers() {
     
     // 计算cloth markers的几何中心
     std::vector<std::string> cloth_marker_names = {
-        "cloth09081", "cloth09082", "cloth09083", "cloth09084"
+        "cloth1", "cloth2", "cloth3", "cloth4", "cloth5", "cloth6", "cloth7"
     };
     
     Eigen::Vector3d cloth_center_sum(0.0, 0.0, 0.0);
@@ -470,7 +471,7 @@ void CoordinateTestNode::processSpecificMarkers() {
         cloth_markers_center_valid_ = true;
         
         RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-                             "Cloth center from %d markers: [%.4f, %.4f, %.4f] (m)",
+                             "Cloth center from %d/7 markers: [%.4f, %.4f, %.4f] (m)",
                              valid_cloth_markers,
                              cloth_markers_center_.x, 
                              cloth_markers_center_.y, 
@@ -478,13 +479,13 @@ void CoordinateTestNode::processSpecificMarkers() {
     } else {
         cloth_markers_center_valid_ = false;
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                            "No cloth markers (%d/4) found for center calculation", 
+                            "No cloth markers (%d/7) found for center calculation", 
                             valid_cloth_markers);
     }
 
     // 输出找到的 markers 数量
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                         "Found %zu/8 target markers", marker_positions_.size());
+                         "Found %zu/11 target markers", marker_positions_.size());
     
     // 发布8个目标markers的位置信息
     if (!marker_positions_.empty()) {
