@@ -240,122 +240,122 @@ class PiperRosNode(Node):
             if self.gripper_exist:
                 self.piper.GripperCtrl(abs(gripper), 1000, 0x01, 0)
 
-    # def joint_callback(self, joint_data):
-    #     """Callback function for joint angles - ORIGINAL VERSION (COMMENTED OUT)
-
-    #     Args:
-    #         joint_data (): The joint data
-    #     """
-    #     factor = 57324.840764  # 1000*180/3.14
-    #     # self.get_logger().info(f"Received Joint States:")
-
-    #     # 创建一个字典来存储关节名称与位置的映射
-    #     joint_positions = {}
-    #     joint_6 = 0
-
-    #     # 遍历joint_data.name来映射位置
-    #     for idx, joint_name in enumerate(joint_data.name):
-    #         self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
-    #         joint_positions[joint_name] = round(joint_data.position[idx] * factor)
-        
-    #     # 获取第7个关节的位置
-    #     if len(joint_data.position) >= 7:
-    #         # self.get_logger().info(f"joint_7: {joint_data.position[6]}")
-    #         joint_6 = round(joint_data.position[6] * 1000 * 1000)
-    #         joint_6 = joint_6 * self.gripper_val_mutiple
-
-    #     # 控制电机速度
-    #     if self.GetEnableFlag():
-    #         if joint_data.velocity != []:
-    #             all_zeros = all(v == 0 for v in joint_data.velocity)
-    #         else:
-    #             all_zeros = True
-    #         if not all_zeros:
-    #             lens = len(joint_data.velocity)
-    #             if lens == 7:
-    #                 vel_all = clip(round(joint_data.velocity[6]), 1, 100)
-    #                 self.get_logger().info(f"vel_all: {vel_all}")
-    #                 self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
-    #             else:
-    #                 self.piper.MotionCtrl_2(0x01, 0x01, 30)
-    #         else:
-    #             self.piper.MotionCtrl_2(0x01, 0x01, 30)
-
-    #         # 使用关节名称来动态控制关节
-    #         self.piper.JointCtrl(
-    #             joint_positions.get('joint1', 0),
-    #             joint_positions.get('joint2', 0),
-    #             joint_positions.get('joint3', 0),
-    #             joint_positions.get('joint4', 0),
-    #             joint_positions.get('joint5', 0),
-    #             joint_positions.get('joint6', 0)
-    #         )
-
-    #         # 夹爪控制
-    #         if self.gripper_exist:
-    #             if len(joint_data.effort) >= 7:
-    #                 gripper_effort = clip(joint_data.effort[6], 0.5, 3)
-    #                 # self.get_logger().info(f"gripper_effort: {gripper_effort}")
-    #                 if not math.isnan(gripper_effort):
-    #                     gripper_effort = round(gripper_effort * 1000)
-    #                 else:
-    #                     # self.get_logger().warning("Gripper effort is NaN, using default value.")
-    #                     gripper_effort = 1000  # 设置默认值
-    #                 self.piper.GripperCtrl(abs(joint_6), gripper_effort, 0x01, 0)
-    #             else:
-    #                 self.piper.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
-
     def joint_callback(self, joint_data):
-        """Callback function for joint angles using MIT control
+        """Callback function for joint angles - ORIGINAL VERSION (COMMENTED OUT)
 
         Args:
-            joint_data (): The joint data (JointState message)
+            joint_data (): The joint data
         """
-        if not self.GetEnableFlag():
-            return
-            
-        # 确保有足够的关节数据
-        if len(joint_data.position) < 6:
-            self.get_logger().warning(f"Not enough joint positions: {len(joint_data.position)}")
-            return
-            
-        # 设置MIT控制模式
-        self.piper.MotionCtrl_2(0x01, 0x04, 0, 0xAD)
+        factor = 57324.840764  # 1000*180/3.14
+        # self.get_logger().info(f"Received Joint States:")
+
+        # 创建一个字典来存储关节名称与位置的映射
+        joint_positions = {}
+        joint_6 = 0
+
+        # 遍历joint_data.name来映射位置
+        for idx, joint_name in enumerate(joint_data.name):
+            self.get_logger().info(f"{joint_name}: {joint_data.position[idx]}")
+            joint_positions[joint_name] = round(joint_data.position[idx] * factor)
         
-        # 默认MIT控制参数 (你可以调整这些值)
-        default_kp = 10.0  # 位置增益
-        default_kd = 1.0   # 阻尼增益
-        default_torque = 0.0  # 前馈力矩
+        # 获取第7个关节的位置
+        if len(joint_data.position) >= 7:
+            # self.get_logger().info(f"joint_7: {joint_data.position[6]}")
+            joint_6 = round(joint_data.position[6] * 1000 * 1000)
+            joint_6 = joint_6 * self.gripper_val_mutiple
+
+        # 控制电机速度
+        if self.GetEnableFlag():
+            if joint_data.velocity != []:
+                all_zeros = all(v == 0 for v in joint_data.velocity)
+            else:
+                all_zeros = True
+            if not all_zeros:
+                lens = len(joint_data.velocity)
+                if lens == 7:
+                    vel_all = clip(round(joint_data.velocity[6]), 1, 100)
+                    self.get_logger().info(f"vel_all: {vel_all}")
+                    self.piper.MotionCtrl_2(0x01, 0x01, vel_all)
+                else:
+                    self.piper.MotionCtrl_2(0x01, 0x01, 30)
+            else:
+                self.piper.MotionCtrl_2(0x01, 0x01, 30)
+
+            # 使用关节名称来动态控制关节
+            self.piper.JointCtrl(
+                joint_positions.get('joint1', 0),
+                joint_positions.get('joint2', 0),
+                joint_positions.get('joint3', 0),
+                joint_positions.get('joint4', 0),
+                joint_positions.get('joint5', 0),
+                joint_positions.get('joint6', 0)
+            )
+
+            # 夹爪控制
+            if self.gripper_exist:
+                if len(joint_data.effort) >= 7:
+                    gripper_effort = clip(joint_data.effort[6], 0.5, 3)
+                    # self.get_logger().info(f"gripper_effort: {gripper_effort}")
+                    if not math.isnan(gripper_effort):
+                        gripper_effort = round(gripper_effort * 1000)
+                    else:
+                        # self.get_logger().warning("Gripper effort is NaN, using default value.")
+                        gripper_effort = 1000  # 设置默认值
+                    self.piper.GripperCtrl(abs(joint_6), gripper_effort, 0x01, 0)
+                else:
+                    self.piper.GripperCtrl(abs(joint_6), 1000, 0x01, 0)
+
+    # def joint_callback(self, joint_data):
+    #     """Callback function for joint angles using MIT control
+
+    #     Args:
+    #         joint_data (): The joint data (JointState message)
+    #     """
+    #     if not self.GetEnableFlag():
+    #         return
+            
+    #     # 确保有足够的关节数据
+    #     if len(joint_data.position) < 6:
+    #         self.get_logger().warning(f"Not enough joint positions: {len(joint_data.position)}")
+    #         return
+            
+    #     # 设置MIT控制模式
+    #     self.piper.MotionCtrl_2(0x01, 0x04, 0, 0xAD)
         
-        # 对每个关节应用MIT控制
-        for i in range(6):
-            if i < len(joint_data.position):
-                target_position = joint_data.position[i]  # 目标角度(弧度)
-                motor_num = i + 1  # 电机编号从1开始
+    #     # 默认MIT控制参数 (你可以调整这些值)
+    #     default_kp = 10.0  # 位置增益
+    #     default_kd = 1.0   # 阻尼增益
+    #     default_torque = 0.0  # 前馈力矩
+        
+    #     # 对每个关节应用MIT控制
+    #     for i in range(6):
+    #         if i < len(joint_data.position):
+    #             target_position = joint_data.position[i]  # 目标角度(弧度)
+    #             motor_num = i + 1  # 电机编号从1开始
                 
-                # 调用JointMitCtrl进行MIT控制
-                # 参数: (电机编号, 目标角度, 目标速度, kp, kd, 前馈力矩)
-                self.piper.JointMitCtrl(
-                    motor_num,
-                    target_position,  # 目标角度
-                    0.0,             # 目标速度 (通常设为0)
-                    default_kp,      # 位置增益
-                    default_kd,      # 阻尼增益  
-                    default_torque   # 前馈力矩
-                )
+    #             # 调用JointMitCtrl进行MIT控制
+    #             # 参数: (电机编号, 目标角度, 目标速度, kp, kd, 前馈力矩)
+    #             self.piper.JointMitCtrl(
+    #                 motor_num,
+    #                 target_position,  # 目标角度
+    #                 0.0,             # 目标速度 (通常设为0)
+    #                 default_kp,      # 位置增益
+    #                 default_kd,      # 阻尼增益  
+    #                 default_torque   # 前馈力矩
+    #             )
                 
-                # 可选：打印调试信息
-                joint_name = joint_data.name[i] if i < len(joint_data.name) else f"joint{i+1}"
-                self.get_logger().info(f"MIT控制 {joint_name}: 目标角度={target_position:.3f}rad")
+    #             # 可选：打印调试信息
+    #             joint_name = joint_data.name[i] if i < len(joint_data.name) else f"joint{i+1}"
+    #             self.get_logger().info(f"MIT控制 {joint_name}: 目标角度={target_position:.3f}rad")
         
-        # 夹爪控制 (如果存在)
-        if self.gripper_exist and len(joint_data.position) >= 7:
-            gripper_position = joint_data.position[6]
-            gripper_value = round(gripper_position * 1000 * 1000)
-            gripper_value = gripper_value * self.gripper_val_mutiple
-            gripper_effort = 1000  # 默认夹爪力度
+    #     # 夹爪控制 (如果存在)
+    #     if self.gripper_exist and len(joint_data.position) >= 7:
+    #         gripper_position = joint_data.position[6]
+    #         gripper_value = round(gripper_position * 1000 * 1000)
+    #         gripper_value = gripper_value * self.gripper_val_mutiple
+    #         gripper_effort = 1000  # 默认夹爪力度
             
-            self.piper.GripperCtrl(abs(gripper_value), gripper_effort, 0x01, 0)
+    #         self.piper.GripperCtrl(abs(gripper_value), gripper_effort, 0x01, 0)
 
 
     def enable_callback(self, enable_flag: Bool):

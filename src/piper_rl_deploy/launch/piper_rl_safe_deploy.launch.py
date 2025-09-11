@@ -12,7 +12,7 @@ def generate_launch_description():
     # 声明启动参数
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value=os.path.join(package_dir, 'models', 'model.pt'),
+        default_value=os.path.join(package_dir, 'models', 'policy.pt'),
         description='Path to the RL model file'
     )
     
