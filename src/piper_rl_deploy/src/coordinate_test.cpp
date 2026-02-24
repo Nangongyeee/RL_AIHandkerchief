@@ -28,6 +28,7 @@ CoordinateTestNode::CoordinateTestNode()
 
     // 去掉重复的 pos 和 vel 发布，只保留更完整的消息格式
     vel_twist_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("handkerchief_velocity", 10);
+    end_effector_vel_pub_ = this->create_publisher<geometry_msgs::msg::TwistStamped>("end_effector_velocity", 10);
     root_new_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("Piper_root", 10);
     handkerchief_pub_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("handkerchief_piperroot", 10);
     
@@ -109,11 +110,8 @@ void CoordinateTestNode::publishData() {
                                 "Root markers center not available, using original root position");
         }
 
-        // 构造旋转变换矩阵：绕 y 轴逆时针转 90°
-        Eigen::AngleAxisd rot_z(-M_PI/2, Eigen::Vector3d::UnitZ());  // TODO.check
-        Eigen::AngleAxisd rot_x(M_PI/2, Eigen::Vector3d::UnitX());  // TODO.check
-        // 计算 Piper_root 坐标系的姿态四元数：原姿态 * 附加旋转
-        Eigen::Quaterniond piper_root_quat = root_quat * rot_z * rot_x;
+        // 使用 vicon/World 坐标系的四元数（单位四元数，表示无旋转）
+        Eigen::Quaterniond piper_root_quat = Eigen::Quaterniond::Identity();  // vicon/World 的四元数
         Eigen::Matrix3d R = piper_root_quat.toRotationMatrix();
 
         // 计算 Piper_root 坐标系的位置：沿新坐标系 -z 轴平移 9mm
@@ -147,8 +145,163 @@ void CoordinateTestNode::publishData() {
         tf_msg.transform.rotation.z = piper_root_quat.z();
         tf_msg.transform.rotation.w = piper_root_quat.w();
         tf_broadcaster_->sendTransform(tf_msg);
+        
+        // 2. 处理机械臂末端位姿（如果有数据）
+        if (end_effector_pose_) {
+            // /end_pose 话题发布的数据已经是在机械臂基座坐标系下的位姿
+            // 首先获取原始的末端执行器位置和姿态
+            Eigen::Vector3d end_effector_base_pos(
+                end_effector_pose_->position.x,
+                end_effector_pose_->position.y,
+                end_effector_pose_->position.z
+            );
+            Eigen::Quaterniond end_effector_quat_in_piper(
+                end_effector_pose_->orientation.w,
+                end_effector_pose_->orientation.x,
+                end_effector_pose_->orientation.y,
+                end_effector_pose_->orientation.z
+            );
+            
+            // 沿着末端执行器自身坐标系的 z 轴移动 17cm
+            Eigen::Matrix3d end_effector_rotation = end_effector_quat_in_piper.toRotationMatrix();
+            Eigen::Vector3d z_axis_direction = end_effector_rotation.col(2); // 末端执行器的 z 轴方向
+            Eigen::Vector3d offset = 0.17 * z_axis_direction; // 17cm 偏移
+            Eigen::Vector3d end_effector_in_piper = end_effector_base_pos + offset;
+            
+            // 发布机械臂末端在 Piper_root 坐标系下的位姿
+            geometry_msgs::msg::PoseStamped end_effector_piperroot;
+            end_effector_piperroot.header.stamp = this->now();
+            end_effector_piperroot.header.frame_id = "Piper_root";
+            end_effector_piperroot.pose.position.x = end_effector_in_piper.x();
+            end_effector_piperroot.pose.position.y = end_effector_in_piper.y();
+            end_effector_piperroot.pose.position.z = end_effector_in_piper.z();
+            end_effector_piperroot.pose.orientation.x = end_effector_quat_in_piper.x();
+            end_effector_piperroot.pose.orientation.y = end_effector_quat_in_piper.y();
+            end_effector_piperroot.pose.orientation.z = end_effector_quat_in_piper.z();
+            end_effector_piperroot.pose.orientation.w = end_effector_quat_in_piper.w();
+            end_effector_pub_->publish(end_effector_piperroot);
+            
+            // 发布末端坐标系的 TF
+            geometry_msgs::msg::TransformStamped end_effector_tf;
+            end_effector_tf.header.stamp = this->now();
+            end_effector_tf.header.frame_id = "Piper_root";
+            end_effector_tf.child_frame_id = "EndEffector_piperroot";
+            end_effector_tf.transform.translation.x = end_effector_in_piper.x();
+            end_effector_tf.transform.translation.y = end_effector_in_piper.y();
+            end_effector_tf.transform.translation.z = end_effector_in_piper.z();
+            end_effector_tf.transform.rotation.x = end_effector_quat_in_piper.x();
+            end_effector_tf.transform.rotation.y = end_effector_quat_in_piper.y();
+            end_effector_tf.transform.rotation.z = end_effector_quat_in_piper.z();
+            end_effector_tf.transform.rotation.w = end_effector_quat_in_piper.w();
+            tf_broadcaster_->sendTransform(end_effector_tf);
+            
 
-        // 2. 计算手绢在 Piper_root 坐标系下的位置和姿态
+        } else {
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No end effector pose data available");
+        }
+
+        
+        // 3. 计算机械臂末端在 Piper_root 坐标系下的速度
+        if (end_effector_pose_) {
+            // 获取当前末端执行器在 Piper_root 坐标系下的位置
+            Eigen::Vector3d current_end_effector_base_pos(
+                end_effector_pose_->position.x,
+                end_effector_pose_->position.y,
+                end_effector_pose_->position.z
+            );
+            Eigen::Quaterniond current_end_effector_quat(
+                end_effector_pose_->orientation.w,
+                end_effector_pose_->orientation.x,
+                end_effector_pose_->orientation.y,
+                end_effector_pose_->orientation.z
+            );
+            
+            // 计算末端执行器在 Piper_root 坐标系下的位置（包含17cm偏移）
+            Eigen::Matrix3d current_end_effector_rotation = current_end_effector_quat.toRotationMatrix();
+            Eigen::Vector3d current_z_axis_direction = current_end_effector_rotation.col(2);
+            Eigen::Vector3d current_offset = 0.17 * current_z_axis_direction;
+            Eigen::Vector3d current_end_effector_in_piper = current_end_effector_base_pos + current_offset;
+            
+            // 计算末端执行器速度（参考手绢速度计算逻辑）
+            rclcpp::Time now = this->now();
+            double dt = prev_time_.nanoseconds() > 0 ? (now - prev_time_).seconds() : 0.0;
+            
+            Eigen::Vector3d end_effector_velocity_vec(0, 0, 0);
+            bool end_effector_velocity_valid = false;
+            
+            if (!first_end_effector_callback_ && dt > 0.001 && dt < 0.05) { // dt在1ms到50ms之间才计算速度
+                // 计算原始速度
+                Eigen::Vector3d raw_end_effector_velocity;
+                raw_end_effector_velocity.x() = (current_end_effector_in_piper.x() - prev_end_effector_pos_[0]) / dt;
+                raw_end_effector_velocity.y() = (current_end_effector_in_piper.y() - prev_end_effector_pos_[1]) / dt;
+                raw_end_effector_velocity.z() = (current_end_effector_in_piper.z() - prev_end_effector_pos_[2]) / dt;
+                
+                // 速度限幅：限制最大速度为 3 m/s
+                double max_velocity = 3.0;
+                if (raw_end_effector_velocity.norm() < max_velocity) {
+                    // 低通滤波
+                    double alpha = 0.4; // 滤波系数
+                    end_effector_velocity_vec.x() = alpha * raw_end_effector_velocity.x() + (1 - alpha) * prev_end_effector_velocity_[0];
+                    end_effector_velocity_vec.y() = alpha * raw_end_effector_velocity.y() + (1 - alpha) * prev_end_effector_velocity_[1];
+                    end_effector_velocity_vec.z() = alpha * raw_end_effector_velocity.z() + (1 - alpha) * prev_end_effector_velocity_[2];
+                    end_effector_velocity_valid = true;
+                    
+                    // 更新上一次速度
+                    prev_end_effector_velocity_[0] = end_effector_velocity_vec.x();
+                    prev_end_effector_velocity_[1] = end_effector_velocity_vec.y();
+                    prev_end_effector_velocity_[2] = end_effector_velocity_vec.z();
+                } else {
+                    // 速度异常大，使用上一次的速度值并逐渐衰减
+                    end_effector_velocity_vec.x() = prev_end_effector_velocity_[0] * 0.9;
+                    end_effector_velocity_vec.y() = prev_end_effector_velocity_[1] * 0.9;
+                    end_effector_velocity_vec.z() = prev_end_effector_velocity_[2] * 0.9;
+                    end_effector_velocity_valid = true;
+                    
+                    // 更新上一次速度为衰减后的值
+                    prev_end_effector_velocity_[0] = end_effector_velocity_vec.x();
+                    prev_end_effector_velocity_[1] = end_effector_velocity_vec.y();
+                    prev_end_effector_velocity_[2] = end_effector_velocity_vec.z();
+                    
+                    RCLCPP_WARN(this->get_logger(), "末端执行器速度异常: %.3f m/s, 使用衰减速度", raw_end_effector_velocity.norm());
+                }
+            } else if (dt >= 0.05) {
+                // 时间间隔过长（可能丢帧），逐渐衰减速度至零
+                end_effector_velocity_vec.x() = prev_end_effector_velocity_[0] * 0.5;
+                end_effector_velocity_vec.y() = prev_end_effector_velocity_[1] * 0.5;
+                end_effector_velocity_vec.z() = prev_end_effector_velocity_[2] * 0.5;
+                end_effector_velocity_valid = true;
+                
+                prev_end_effector_velocity_[0] = end_effector_velocity_vec.x();
+                prev_end_effector_velocity_[1] = end_effector_velocity_vec.y();
+                prev_end_effector_velocity_[2] = end_effector_velocity_vec.z();
+                
+                RCLCPP_WARN(this->get_logger(), "末端执行器检测到丢帧: dt=%.3f s, 衰减速度", dt);
+            }
+            
+            // 发布末端执行器速度消息
+            if (end_effector_velocity_valid) {
+                geometry_msgs::msg::TwistStamped end_effector_twist_msg;
+                end_effector_twist_msg.header.stamp = now;
+                end_effector_twist_msg.header.frame_id = "Piper_root";
+                end_effector_twist_msg.twist.linear.x = end_effector_velocity_vec.x();
+                end_effector_twist_msg.twist.linear.y = end_effector_velocity_vec.y();
+                end_effector_twist_msg.twist.linear.z = end_effector_velocity_vec.z();
+                end_effector_twist_msg.twist.angular.x = 0.0;
+                end_effector_twist_msg.twist.angular.y = 0.0;
+                end_effector_twist_msg.twist.angular.z = 0.0;
+                end_effector_vel_pub_->publish(end_effector_twist_msg);
+            }
+            
+            // 更新上一次的末端执行器位置
+            prev_end_effector_pos_[0] = current_end_effector_in_piper.x();
+            prev_end_effector_pos_[1] = current_end_effector_in_piper.y();
+            prev_end_effector_pos_[2] = current_end_effector_in_piper.z();
+            first_end_effector_callback_ = false; // 标记已经不是第一次回调
+        } else {
+            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No end effector pose data available for velocity calculation");
+        }
+
+        // 4. 计算手绢在 Piper_root 坐标系下的位置和姿态
         Eigen::Vector3d handkerchief_world;
         Eigen::Quaterniond handkerchief_quat(
             handkerchief_pose_->pose.orientation.w,
@@ -193,9 +346,39 @@ void CoordinateTestNode::publishData() {
 
         // 手绢在 Piper_root 坐标系下的位置
         Eigen::Vector3d handkerchief_in_piper = R.transpose() * (handkerchief_world - piper_root_position);
-        
+
+        // 沿着Piper_root坐标系的z轴负方向平移2cm
+        handkerchief_in_piper.z() -= 0.02;  // 减去0.02 m
+
         // 手绢在 Piper_root 坐标系下的姿态（相对于 Piper_root 的姿态变换）
         Eigen::Quaterniond handkerchief_quat_in_piper = piper_root_quat.inverse() * handkerchief_quat;
+        
+        // // 如果有末端执行器数据，用其位置替换手绢位置
+        // if (end_effector_pose_) {
+        //     Eigen::Vector3d end_effector_base_pos(
+        //         end_effector_pose_->position.x,
+        //         end_effector_pose_->position.y,
+        //         end_effector_pose_->position.z
+        //     );
+        //     Eigen::Quaterniond end_effector_quat_in_piper(
+        //         end_effector_pose_->orientation.w,
+        //         end_effector_pose_->orientation.x,
+        //         end_effector_pose_->orientation.y,
+        //         end_effector_pose_->orientation.z
+        //     );
+            
+        //     // 沿着末端执行器自身坐标系的 z 轴移动 17cm
+        //     Eigen::Matrix3d end_effector_rotation = end_effector_quat_in_piper.toRotationMatrix();
+        //     Eigen::Vector3d z_axis_direction = end_effector_rotation.col(2);
+        //     Eigen::Vector3d offset = 0.17 * z_axis_direction;
+        //     Eigen::Vector3d end_effector_in_piper = end_effector_base_pos + offset;
+            
+        //     // 用 end_effector_piperroot 的xyz代替 handkerchief_piperroot的xyz
+        //     handkerchief_in_piper.x() = end_effector_in_piper.x();
+        //     handkerchief_in_piper.y() = end_effector_in_piper.y();
+        //     handkerchief_in_piper.z() = end_effector_in_piper.z() - 0.10;
+        // }
+
 
         // 发布 handkerchief_piperroot PoseStamped 消息
         geometry_msgs::msg::PoseStamped handkerchief_piperroot;
@@ -223,7 +406,7 @@ void CoordinateTestNode::publishData() {
         handkerchief_tf.transform.rotation.w = handkerchief_quat_in_piper.w();
         tf_broadcaster_->sendTransform(handkerchief_tf);
 
-        // 3. 计算手绢在 Piper_root 坐标系下的速度（带丢帧处理）
+        // 5. 计算手绢在 Piper_root 坐标系下的速度（带丢帧处理）
         rclcpp::Time now = this->now();
         double dt = prev_time_.nanoseconds() > 0 ? (now - prev_time_).seconds() : 0.0;
         
@@ -300,59 +483,7 @@ void CoordinateTestNode::publishData() {
         prev_time_ = now;
         first_callback_ = false; // 标记已经不是第一次回调
         
-        // 4. 处理机械臂末端位姿（如果有数据）
-        if (end_effector_pose_) {
-            // /end_pose 话题发布的数据已经是在机械臂基座坐标系下的位姿
-            // 首先获取原始的末端执行器位置和姿态
-            Eigen::Vector3d end_effector_base_pos(
-                end_effector_pose_->position.x,
-                end_effector_pose_->position.y,
-                end_effector_pose_->position.z
-            );
-            Eigen::Quaterniond end_effector_quat_in_piper(
-                end_effector_pose_->orientation.w,
-                end_effector_pose_->orientation.x,
-                end_effector_pose_->orientation.y,
-                end_effector_pose_->orientation.z
-            );
-            
-            // 沿着末端执行器自身坐标系的 z 轴移动 17cm
-            Eigen::Matrix3d end_effector_rotation = end_effector_quat_in_piper.toRotationMatrix();
-            Eigen::Vector3d z_axis_direction = end_effector_rotation.col(2); // 末端执行器的 z 轴方向
-            Eigen::Vector3d offset = 0.17 * z_axis_direction; // 17cm 偏移
-            Eigen::Vector3d end_effector_in_piper = end_effector_base_pos + offset;
-            
-            // 发布机械臂末端在 Piper_root 坐标系下的位姿
-            geometry_msgs::msg::PoseStamped end_effector_piperroot;
-            end_effector_piperroot.header.stamp = this->now();
-            end_effector_piperroot.header.frame_id = "Piper_root";
-            end_effector_piperroot.pose.position.x = end_effector_in_piper.x();
-            end_effector_piperroot.pose.position.y = end_effector_in_piper.y();
-            end_effector_piperroot.pose.position.z = end_effector_in_piper.z();
-            end_effector_piperroot.pose.orientation.x = end_effector_quat_in_piper.x();
-            end_effector_piperroot.pose.orientation.y = end_effector_quat_in_piper.y();
-            end_effector_piperroot.pose.orientation.z = end_effector_quat_in_piper.z();
-            end_effector_piperroot.pose.orientation.w = end_effector_quat_in_piper.w();
-            end_effector_pub_->publish(end_effector_piperroot);
-            
-            // 发布末端坐标系的 TF
-            geometry_msgs::msg::TransformStamped end_effector_tf;
-            end_effector_tf.header.stamp = this->now();
-            end_effector_tf.header.frame_id = "Piper_root";
-            end_effector_tf.child_frame_id = "EndEffector_piperroot";
-            end_effector_tf.transform.translation.x = end_effector_in_piper.x();
-            end_effector_tf.transform.translation.y = end_effector_in_piper.y();
-            end_effector_tf.transform.translation.z = end_effector_in_piper.z();
-            end_effector_tf.transform.rotation.x = end_effector_quat_in_piper.x();
-            end_effector_tf.transform.rotation.y = end_effector_quat_in_piper.y();
-            end_effector_tf.transform.rotation.z = end_effector_quat_in_piper.z();
-            end_effector_tf.transform.rotation.w = end_effector_quat_in_piper.w();
-            tf_broadcaster_->sendTransform(end_effector_tf);
-            
 
-        } else {
-            RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "No end effector pose data available");
-        }
     }
 
 void CoordinateTestNode::processSpecificMarkers() {
@@ -363,7 +494,7 @@ void CoordinateTestNode::processSpecificMarkers() {
     // 定义我们要查找的特定 marker 名称
     std::vector<std::string> target_markers = {
         "root09101", "root09102", "root09103", "root09104",
-        "cloth1", "cloth2", "cloth3", "cloth4", "cloth5", "cloth6", "cloth7"
+        "cloth1", "cloth2", "cloth3", "cloth4"
     };
 
     // 清空之前的位置数据
@@ -448,7 +579,7 @@ void CoordinateTestNode::processSpecificMarkers() {
     
     // 计算cloth markers的几何中心
     std::vector<std::string> cloth_marker_names = {
-        "cloth1", "cloth2", "cloth3", "cloth4", "cloth5", "cloth6", "cloth7"
+        "cloth1", "cloth2", "cloth3", "cloth4"
     };
     
     Eigen::Vector3d cloth_center_sum(0.0, 0.0, 0.0);
@@ -471,7 +602,7 @@ void CoordinateTestNode::processSpecificMarkers() {
         cloth_markers_center_valid_ = true;
         
         RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-                             "Cloth center from %d/7 markers: [%.4f, %.4f, %.4f] (m)",
+                             "Cloth center from %d/4 markers: [%.4f, %.4f, %.4f] (m)",
                              valid_cloth_markers,
                              cloth_markers_center_.x, 
                              cloth_markers_center_.y, 
@@ -479,13 +610,13 @@ void CoordinateTestNode::processSpecificMarkers() {
     } else {
         cloth_markers_center_valid_ = false;
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                            "No cloth markers (%d/7) found for center calculation", 
+                            "No cloth markers (%d/4) found for center calculation", 
                             valid_cloth_markers);
     }
 
     // 输出找到的 markers 数量
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                         "Found %zu/11 target markers", marker_positions_.size());
+                         "Found %zu/8 target markers", marker_positions_.size());
     
     // 发布8个目标markers的位置信息
     if (!marker_positions_.empty()) {

@@ -39,6 +39,11 @@ PiperRLSafeController::PiperRLSafeController(const std::string& node_name)
         std::bind(&PiperRLSafeController::endEffectorPoseCallback, this, std::placeholders::_1)
     );
     
+    end_effector_vel_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
+        "/end_effector_velocity", 10,
+        std::bind(&PiperRLSafeController::endEffectorVelocityCallback, this, std::placeholders::_1)
+    );
+    
     // 发布关节控制命令
     joint_cmd_pub_ = this->create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
     action_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("/rl_actions", 10);
@@ -87,7 +92,7 @@ void PiperRLSafeController::loadParameters() {
     this->declare_parameter("inference_frequency", 50.0);
     this->declare_parameter("model_path", "");
     this->declare_parameter("model_type", "pytorch");
-    this->declare_parameter("obs_dim", 21);      // 6(关节角度) + 6(关节速度) + 3(末端位置) + 3(手绢位置) + 3(手绢速度)
+    this->declare_parameter("obs_dim", 24);      // 6(关节角度) + 6(关节速度) + 3(末端位置) + 3(末端速度) + 3(手绢位置) + 3(手绢速度)
     this->declare_parameter("action_dim", 6);    // 6个关节
     
     // 获取参数
@@ -119,7 +124,7 @@ void PiperRLSafeController::loadParameters() {
     default_kd_ = this->get_parameter("default_kd").as_double_array();
     action_scale_ = this->get_parameter("action_scale").as_double_array();
     joint_pos_offset_ = this->get_parameter("joint_pos_offset").as_double_array();
-    
+
     RCLCPP_INFO(this->get_logger(), "Parameters loaded successfully");
 }
 
@@ -153,6 +158,7 @@ void PiperRLSafeController::initializeRobot() {
     current_obs_.joint_positions.resize(joint_names_.size(), 0.0);
     current_obs_.joint_velocities.resize(joint_names_.size(), 0.0);
     current_obs_.stick_tip_position.resize(3, 0.0);
+    current_obs_.stick_tip_velocity.resize(3, 0.0);
     current_obs_.handkerchief_position.resize(3, 0.0);
     current_obs_.handkerchief_velocity.resize(3, 0.0);
     
@@ -211,6 +217,18 @@ void PiperRLSafeController::endEffectorPoseCallback(const geometry_msgs::msg::Po
                  current_obs_.stick_tip_position[0], 
                  current_obs_.stick_tip_position[1], 
                  current_obs_.stick_tip_position[2]);
+}
+
+void PiperRLSafeController::endEffectorVelocityCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg) {
+    // 直接使用coordinate_test已经计算好的末端执行器速度数据（在Piper_root坐标系下）
+    current_obs_.stick_tip_velocity[0] = static_cast<float>(msg->twist.linear.x);
+    current_obs_.stick_tip_velocity[1] = static_cast<float>(msg->twist.linear.y);
+    current_obs_.stick_tip_velocity[2] = static_cast<float>(msg->twist.linear.z);
+    
+    RCLCPP_DEBUG(this->get_logger(), "End effector velocity updated: [%.3f, %.3f, %.3f]", 
+                 current_obs_.stick_tip_velocity[0], 
+                 current_obs_.stick_tip_velocity[1], 
+                 current_obs_.stick_tip_velocity[2]);
 }
 
 void PiperRLSafeController::controlLoop() {
@@ -283,9 +301,10 @@ std::vector<float> PiperRLSafeController::computeObservation() {
     // 1. robot_dof_pos - 机械臂的6轴角度 (6维)
     // 2. robot_dof_vel - 机械臂的6轴速度 (6维)
     // 3. stick_tip_pos - 机械臂末端位置 (3维)
-    // 4. handkerchief_root_pos_w - 手绢位置 (3维)
-    // 5. handkerchief_root_vel_w - 手绢速度 (3维)
-    // 总共21维观测
+    // 4. stick_tip_vel - 机械臂末端速度 (3维)
+    // 5. handkerchief_root_pos_w - 手绢位置 (3维)
+    // 6. handkerchief_root_vel_w - 手绢速度 (3维)
+    // 总共24维观测
     
     // 1. 机械臂6轴角度
     obs.insert(obs.end(), current_obs_.joint_positions.begin(), current_obs_.joint_positions.end());
@@ -296,16 +315,21 @@ std::vector<float> PiperRLSafeController::computeObservation() {
     // 3. 机械臂末端位置
     obs.insert(obs.end(), current_obs_.stick_tip_position.begin(), current_obs_.stick_tip_position.end());
     
-    // 4. 手绢位置
+    // 4. 机械臂末端速度
+    obs.insert(obs.end(), current_obs_.stick_tip_velocity.begin(), current_obs_.stick_tip_velocity.end());
+    
+    // 5. 手绢位置
     obs.insert(obs.end(), current_obs_.handkerchief_position.begin(), current_obs_.handkerchief_position.end());
     
-    // 5. 手绢速度
+    // 6. 手绢速度
     obs.insert(obs.end(), current_obs_.handkerchief_velocity.begin(), current_obs_.handkerchief_velocity.end());
     
     RCLCPP_DEBUG(this->get_logger(), "Observation computed - Joint pos: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f], "
+                 "Stick tip pos: [%.3f, %.3f, %.3f], vel: [%.3f, %.3f, %.3f], "
                  "Handkerchief pos: [%.3f, %.3f, %.3f], vel: [%.3f, %.3f, %.3f]",
                  obs[0], obs[1], obs[2], obs[3], obs[4], obs[5],
-                 obs[15], obs[16], obs[17], obs[18], obs[19], obs[20]);
+                 obs[12], obs[13], obs[14], obs[15], obs[16], obs[17],
+                 obs[18], obs[19], obs[20], obs[21], obs[22], obs[23]);
     
     return obs;
 }
@@ -320,8 +344,8 @@ std::vector<float> PiperRLSafeController::processActions(const std::vector<float
     // target_positions = 0.5 * (actions + 1) * (upper_limits - lower_limits) + lower_limits
     
     // Piper机械臂的关节限制
-    std::vector<float> lower_limits = {-3.14f, -1.57f, -3.14f, -1.57f, -3.14f, -1.57f};
-    std::vector<float> upper_limits = {3.14f, 1.57f, 3.14f, 1.57f, 3.14f, 1.57f};
+    std::vector<float> lower_limits = {-0.5f, 0.0f, -2.6f, -0.7f, -0.7f, -0.1f};
+    std::vector<float> upper_limits = {0.5f, 0.4f, -2.3f, 0.7f, 0.7f, 0.1f};
     
     // 转换动作到实际关节位置
     for (size_t i = 0; i < actions.size() && i < 6; ++i) {
@@ -333,7 +357,7 @@ std::vector<float> PiperRLSafeController::processActions(const std::vector<float
 }
 
 void PiperRLSafeController::publishJointCommands(const std::vector<float>& actions) {
-    sensor_msgs::msg::JointState joint_cmd;
+        sensor_msgs::msg::JointState joint_cmd;
     joint_cmd.header.stamp = this->now();
     joint_cmd.name = joint_names_;
     
@@ -342,7 +366,8 @@ void PiperRLSafeController::publishJointCommands(const std::vector<float>& actio
     joint_cmd.effort.resize(actions.size());
     
     for (size_t i = 0; i < actions.size(); ++i) {
-        joint_cmd.position[i] = actions[i];
+        // 将命令值乘以 x 后发送
+        joint_cmd.position[i] = actions[i] * 1.1;
         joint_cmd.velocity[i] = 0.0;  // 速度由控制器计算
         joint_cmd.effort[i] = 0.0;   // 力矩由控制器计算
     }

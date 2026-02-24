@@ -63,6 +63,7 @@ private:
         std::vector<float> joint_positions;     // Current joint angles
         std::vector<float> joint_velocities;    // Current joint velocities
         std::vector<float> stick_tip_position;  // End effector position (from coordinate_test)
+        std::vector<float> stick_tip_velocity;  // End effector velocity (from coordinate_test)
         std::vector<float> handkerchief_position; // Handkerchief position in Piper_root frame
         std::vector<float> handkerchief_velocity; // Handkerchief velocity in Piper_root frame
     } current_obs_;
@@ -73,6 +74,7 @@ private:
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr handkerchief_pose_sub_;
     rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr handkerchief_vel_sub_;
     rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pose_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr end_effector_vel_sub_;
     
     // Publishers
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_cmd_pub_;
@@ -108,6 +110,12 @@ private:
      * @param msg End effector pose from coordinate_test (end_effector_piperroot topic)
      */
     void endEffectorPoseCallback(const geometry_msgs::msg::PoseStamped::SharedPtr msg);
+    
+    /**
+     * @brief End effector velocity callback - receives end effector velocity in Piper_root frame
+     * @param msg End effector velocity from coordinate_test (end_effector_velocity topic)
+     */
+    void endEffectorVelocityCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
     
     // === Main Processing Functions ===
     

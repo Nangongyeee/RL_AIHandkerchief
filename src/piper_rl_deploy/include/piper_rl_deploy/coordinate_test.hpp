@@ -66,6 +66,11 @@ private:
     rclcpp::Time prev_time_;                                         ///< Previous timestamp for velocity calculation
     bool first_callback_ = true;                                     ///< Flag for first callback handling
     
+    // End effector velocity calculation state
+    std::vector<double> prev_end_effector_pos_{0.0, 0.0, 0.0};      ///< Previous end effector position in Piper_root frame
+    std::vector<double> prev_end_effector_velocity_{0.0, 0.0, 0.0}; ///< Previous end effector velocity for filtering
+    bool first_end_effector_callback_ = true;                       ///< Flag for first end effector callback handling
+    
     // === ROS2 Publishers and Subscribers ===
     
     // Subscribers
@@ -76,6 +81,7 @@ private:
     
     // Publishers
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr vel_twist_pub_;        ///< Handkerchief velocity publisher
+    rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr end_effector_vel_pub_; ///< End effector velocity publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr root_new_pub_;          ///< Piper_root pose publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr handkerchief_pub_;      ///< Handkerchief in Piper_root frame publisher
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr end_effector_pub_;      ///< End effector in Piper_root frame publisher
